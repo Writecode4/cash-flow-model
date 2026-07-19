@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cash Flow Model</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root{--primary:#2563eb;--danger:#dc2626;--success:#16a34a;--warning:#d97706;--bg:#f8fafc;--card:#fff;--border:#e2e8f0;--text:#1e293b;--muted:#64748b}*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text)}.container{max-width:1400px;margin:0 auto;padding:20px}header{background:var(--primary);color:#fff;padding:20px 0;margin-bottom:20px}header h1{text-align:center}.tabs{display:flex;gap:4px;margin-bottom:20px;flex-wrap:wrap}.tab{padding:10px 20px;border:1px solid var(--border);background:var(--card);cursor:pointer;border-radius:6px 6px 0 0;font-size:14px}.tab.active{background:var(--primary);color:#fff;border-color:var(--primary)}.tab-content{display:none}.tab-content.active{display:block}.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;margin-bottom:20px}.card h2{font-size:18px;margin-bottom:15px;color:var(--primary)}.card h3{font-size:15px;margin:15px 0 10px;color:var(--muted)}.grid{display:grid;gap:15px}.grid-2{grid-template-columns:1fr 1fr}.grid-3{grid-template-columns:1fr 1fr 1fr}.grid-4{grid-template-columns:1fr 1fr 1fr 1fr}@media(max-width:768px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}}label{display:block;font-size:13px;font-weight:500;margin-bottom:4px;color:var(--muted)}input,select{width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px}input:focus,select:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.1)}.btn{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500}.btn-primary{background:var(--primary);color:#fff}.btn-danger{background:var(--danger);color:#fff}.btn-success{background:var(--success);color:#fff}.btn-warning{background:var(--warning);color:#fff}.btn-sm{padding:4px 10px;font-size:12px}.btn:hover{opacity:.9}.btn-group{display:flex;gap:8px;margin-top:15px;flex-wrap:wrap}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}th{background:var(--bg);font-weight:600;color:var(--muted);font-size:12px;text-transform:uppercase}tr:hover{background:#f1f5f9}.metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:15px;margin-bottom:20px}.metric{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:15px;text-align:center}.metric .value{font-size:28px;font-weight:700}.metric .label{font-size:12px;color:var(--muted);margin-top:4px}.metric.positive .value{color:var(--success)}.metric.negative .value{color:var(--danger)}.metric.neutral .value{color:var(--primary)}.chart-container{position:relative;height:300px;margin-top:15px}.remove-row{color:var(--danger);cursor:pointer;font-weight:bold}.remove-row:hover{text-decoration:underline}.scenario-list{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:15px}.scenario-chip{padding:6px 12px;border:1px solid var(--border);border-radius:20px;cursor:pointer;font-size:13px}.scenario-chip.active{background:var(--primary);color:#fff;border-color:var(--primary)}.toast{position:fixed;bottom:20px;right:20px;padding:12px 20px;border-radius:8px;color:#fff;font-size:14px;z-index:1000;animation:slideIn .3s ease}.toast.success{background:var(--success)}.toast.error{background:var(--danger)}@keyframes slideIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+    </style>
+</head>
+<body>
+    <header><h1>Cash Flow Model</h1></header>
+    <div class="container">
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('config')">Config</div>
+            <div class="tab" onclick="switchTab('invoices')">Invoices</div>
+            <div class="tab" onclick="switchTab('expenses')">Expenses</div>
+            <div class="tab" onclick="switchTab('projects')">Projects</div>
+            <div class="tab" onclick="switchTab('dashboard')">Dashboard</div>
+        </div>
+
+        <div id="tab-config" class="tab-content active">
+            <div class="card">
+                <h2>Configuration</h2>
+                <div class="grid grid-4">
+                    <div><label>Initial Balance ($)</label><input type="number" id="cfg_balance" value="75000" onchange="recalc()"></div>
+                    <div><label>DPO Days</label><input type="number" id="cfg_dpo" value="30" onchange="recalc()"></div>
+                    <div><label>DIO Days</label><input type="number" id="cfg_dio" value="0" onchange="recalc()"></div>
+                    <div><label>Tax Rate (%)</label><input type="number" id="cfg_tax" value="25" step="0.1" onchange="recalc()"></div>
+                </div>
+                <h3>Monthly Fixed Costs</h3>
+                <table><thead><tr><th>Name</th><th>Amount</th><th></th></tr></thead><tbody id="costs-body"></tbody></table>
+                <div class="btn-group"><button class="btn btn-primary btn-sm" onclick="addCost()">+ Add</button></div>
+            </div>
+        </div>
+
+        <div id="tab-invoices" class="tab-content">
+            <div class="card">
+                <h2>Invoices</h2>
+                <div style="overflow-x:auto"><table><thead><tr><th>ID</th><th>Client</th><th>Amount</th><th>Issue</th><th>Terms</th><th>Status</th><th>Received</th><th></th></tr></thead><tbody id="inv-body"></tbody></table></div>
+                <div class="btn-group"><button class="btn btn-primary btn-sm" onclick="addInv()">+ Add</button></div>
+            </div>
+        </div>
+
+        <div id="tab-expenses" class="tab-content">
+            <div class="card">
+                <h2>Expenses</h2>
+                <div style="overflow-x:auto"><table><thead><tr><th>ID</th><th>Description</th><th>Amount</th><th>Date</th><th>Type</th><th>Category</th><th>Recurring</th><th></th></tr></thead><tbody id="exp-body"></tbody></table></div>
+                <div class="btn-group"><button class="btn btn-primary btn-sm" onclick="addExp()">+ Add</button></div>
+            </div>
+        </div>
+
+        <div id="tab-projects" class="tab-content">
+            <div class="card">
+                <h2>Projects</h2>
+                <div id="proj-container"></div>
+                <div class="btn-group"><button class="btn btn-primary btn-sm" onclick="addProj()">+ Add</button></div>
+            </div>
+        </div>
+
+        <div id="tab-dashboard" class="tab-content">
+            <div class="metric-grid" id="metrics"></div>
+            <div class="grid grid-2">
+                <div class="card"><h2>Cash Flow Forecast</h2><div class="chart-container"><canvas id="chartForecast"></canvas></div></div>
+                <div class="card"><h2>Cumulative Balance</h2><div class="chart-container"><canvas id="chartBalance"></canvas></div></div>
+            </div>
+            <div class="grid grid-2">
+                <div class="card"><h2>Expenses</h2><div class="chart-container"><canvas id="chartExpense"></canvas></div></div>
+                <div class="card"><h2>AR Aging</h2><div class="chart-container"><canvas id="chartAR"></canvas></div></div>
+            </div>
+        </div>
+    </div>
+
+<script>
+let S={cfg:{balance:75000,dpo:30,dio:0,tax:25},costs:[{n:'Salaries',a:25000},{n:'Rent',a:3500},{n:'Tools',a:1200},{n:'Cloud',a:800},{n:'Insurance',a:500},{n:'Marketing',a:1000}],inv:[],exp:[],proj:[]};
+let charts={};
+const D=new Date().toISOString().split('T')[0];
+const T=new Date();
+function da(n){let d=new Date(T);d.setDate(d.getDate()-n);return d.toISOString().split('T')[0]}
+function df(n){let d=new Date(T);d.setDate(d.getDate()+n);return d.toISOString().split('T')[0]}
+function pd(s){return new Date(s+'T00:00:00')}
+function db(a,b){return Math.round((a-b)/864e5)}
+function addMo(d,n){let r=new Date(d);r.setMonth(r.getMonth()+n);let mx=new Date(r.getFullYear(),r.getMonth()+1,0).getDate();r.setDate(Math.min(r.getDate(),mx));return r}
+function moEnd(d){return new Date(d.getFullYear(),d.getMonth()+1,0)}
+
+function switchTab(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));event.target.classList.add('active');document.getElementById('tab-'+n).classList.add('active');if(n==='dashboard')recalc()}
+
+function renderCosts(){document.getElementById('costs-body').innerHTML=S.costs.map((c,i)=>`<tr><td><input value="${c.n}" onchange="S.costs[${i}].n=this.value;recalc()"></td><td><input type="number" value="${c.a}" onchange="S.costs[${i}].a=+this.value;recalc()"></td><td><span class="remove-row" onclick="S.costs.splice(${i},1);renderCosts();recalc()">x</span></td></tr>`).join('')}
+function addCost(){S.costs.push({n:'New',a:0});renderCosts();recalc()}
+
+function renderInv(){document.getElementById('inv-body').innerHTML=S.inv.map((v,i)=>`<tr><td><input value="${v.id}" onchange="S.inv[${i}].id=this.value"></td><td><input value="${v.c}" onchange="S.inv[${i}].c=this.value"></td><td><input type="number" value="${v.a}" onchange="S.inv[${i}].a=+this.value;recalc()"></td><td><input type="date" value="${v.d}" onchange="S.inv[${i}].d=this.value;recalc()"></td><td><input type="number" value="${v.t}" onchange="S.inv[${i}].t=+this.value;recalc()"></td><td><select onchange="S.inv[${i}].s=this.value;recalc()"><option value="pending" ${v.s==='pending'?'selected':''}>Pending</option><option value="received" ${v.s==='received'?'selected':''}>Received</option><option value="late" ${v.s==='late'?'selected':''}>Late</option></select></td><td><input type="number" value="${v.r||0}" onchange="S.inv[${i}].r=+this.value;recalc()"></td><td><span class="remove-row" onclick="S.inv.splice(${i},1);renderInv();recalc()">x</span></td></tr>`).join('')}
+function addInv(){S.inv.push({id:'INV-'+String(S.inv.length+1).padStart(3,'0'),c:'Client',a:0,d:D,t:30,s:'pending',r:0});renderInv();recalc()}
+
+function renderExp(){document.getElementById('exp-body').innerHTML=S.exp.map((e,i)=>`<tr><td><input value="${e.id}" onchange="S.exp[${i}].id=this.value"></td><td><input value="${e.d}" onchange="S.exp[${i}].d=this.value"></td><td><input type="number" value="${e.a}" onchange="S.exp[${i}].a=+this.value;recalc()"></td><td><input type="date" value="${e.dt}" onchange="S.exp[${i}].dt=this.value"></td><td><select onchange="S.exp[${i}].ty=this.value"><option value="variable" ${e.ty==='variable'?'selected':''}>Variable</option><option value="one_time" ${e.ty==='one_time'?'selected':''}>One-time</option></select></td><td><input value="${e.cat}" onchange="S.exp[${i}].cat=this.value"></td><td><select onchange="S.exp[${i}].rec=this.value==='true';recalc()"><option value="true" ${e.rec?'selected':''}>Yes</option><option value="false" ${!e.rec?'selected':''}>No</option></select></td><td><span class="remove-row" onclick="S.exp.splice(${i},1);renderExp();recalc()">x</span></td></tr>`).join('')}
+function addExp(){S.exp.push({id:'EXP-'+String(S.exp.length+1).padStart(3,'0'),d:'Expense',a:0,dt:D,ty:'variable',cat:'General',rec:false});renderExp();recalc()}
+
+function renderProj(){document.getElementById('proj-container').innerHTML=S.proj.map((p,pi)=>`<div class="card" style="margin-bottom:15px;border-left:4px solid var(--primary)"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">${p.id} - ${p.c}</h3><span class="remove-row" onclick="S.proj.splice(${pi},1);renderProj();recalc()">Remove</span></div><div class="grid grid-4"><div><label>ID</label><input value="${p.id}" onchange="S.proj[${pi}].id=this.value;renderProj()"></div><div><label>Client</label><input value="${p.c}" onchange="S.proj[${pi}].c=this.value;renderProj()"></div><div><label>Value ($)</label><input type="number" value="${p.v}" onchange="S.proj[${pi}].v=+this.value;recalc()"></div><div><label>Work %</label><input type="number" value="${p.w}" onchange="S.proj[${pi}].w=+this.value;recalc()"></div></div><h3 style="margin-top:15px">Milestones</h3><table><thead><tr><th>Name</th><th>Amount</th><th>Date</th><th></th></tr></thead><tbody>${(p.ms||[]).map((m,mi)=>`<tr><td><input value="${m.n}" onchange="S.proj[${pi}].ms[${mi}].n=this.value"></td><td><input type="number" value="${m.a}" onchange="S.proj[${pi}].ms[${mi}].a=+this.value;recalc()"></td><td><input type="date" value="${m.dt}" onchange="S.proj[${pi}].ms[${mi}].dt=this.value;recalc()"></td><td><span class="remove-row" onclick="S.proj[${pi}].ms.splice(${mi},1);renderProj();recalc()">x</span></td></tr>`).join('')}</tbody></table><button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="addMs(${pi})">+ Milestone</button></div>`).join('')}
+function addProj(){S.proj.push({id:'PRJ-'+String(S.proj.length+1).padStart(3,'0'),c:'Client',v:0,sd:D,ed:D,ms:[],w:0});renderProj();recalc()}
+function addMs(pi){if(!S.proj[pi].ms)S.proj[pi].ms=[];S.proj[pi].ms.push({n:'Milestone',a:0,dt:df(30)});renderProj();recalc()}
+
+function cp(inv){if(inv.s==='received')return 1;if(inv.s==='defaulted')return 0;let d=db(new Date(),pd(inv.d));return d<=30?.95:d<=60?.85:d<=90?.65:.4}
+
+function forecast(){
+    let data=[],bal=S.cfg.balance,S.cfg.balance;
+    let invIds=new Set(S.inv.map(i=>i.id));
+    let byC={};S.inv.forEach(i=>{if(!byC[i.c])byC[i.c]=[];byC[i.c].push(i.a)});
+    let invoiced=new Set();
+    S.proj.forEach(p=>{(p.ms||[]).forEach((m,i)=>{let id=p.id+'_m'+i;if(m.iid&&invIds.has(m.iid)){invoiced.add(id);return}if((byC[p.c]||[]).some(a=>Math.abs(a-m.a)<.01))invoiced.add(id)})});
+    
+    let taxR=S.cfg.tax/100;
+    for(let m=0;m<12;m++){
+        let fd=addMo(new Date(),m),ms=new Date(fd.getFullYear(),fd.getMonth(),1),me=moEnd(ms);
+        let inc=0;
+        S.inv.forEach(inv=>{if(inv.s==='pending'||inv.s==='late'){let ex=pd(inv.d);ex.setDate(ex.getDate()+inv.t);if(ex>=ms&&ex<=me)inc+=inv.a*cp(inv)}});
+        S.proj.forEach(p=>{(p.ms||[]).forEach((m,i)=>{let md=pd(m.dt);if(md>=ms&&md<=me&&!invoiced.has(p.id+'_m'+i))inc+=m.a})});
+        let fix=S.costs.reduce((s,c)=>s+c.a,0),var_=S.exp.filter(e=>e.ty==='variable'&&e.rec).reduce((s,e)=>s+e.a,0);
+        let gp=inc-fix-var_,tax=0;
+        if(gp>0&&[2,5,8,11].includes(fd.getMonth()))tax=gp*taxR*3;
+        let tot=fix+var+tax,net=inc-tot;bal+=net;
+        data.push({mo:fd.toISOString().slice(0,7),inc,fix,var_,tax,tot,net,bal})
+    }
+    return data
+}
+
+function calcAR(){let a={c:0,'31-60':0,'61-90':0,'90+':0};S.inv.forEach(i=>{if(i.s==='pending'||i.s==='late'){let d=db(new Date(),pd(i.d));if(d<=30)a.c+=i.a;else if(d<=60)a['31-60']+=i.a;else if(d<=90)a['61-90']+=i.a;else a['90+']+=i.a}});return a}
+
+function recalc(){
+    S.cfg.balance=+document.getElementById('cfg_balance').value;
+    S.cfg.dpo=+document.getElementById('cfg_dpo').value;
+    S.cfg.dio=+document.getElementById('cfg_dio').value;
+    S.cfg.tax=+document.getElementById('cfg_tax').value;
+    
+    let pend=S.inv.filter(i=>i.s==='pending'||i.s==='late');
+    let totalAR=pend.reduce((s,i)=>s+i.a*cp(i),0);
+    let totalSales=S.inv.reduce((s,i)=>s+i.a,0);
+    let dso=totalSales?((totalAR/totalSales)*30):0;
+    
+    let fix=S.costs.reduce((s,c)=>s+c.a,0);
+    let var_=S.exp.filter(e=>e.ty==='variable'&&e.rec).reduce((s,e)=>s+e.a,0);
+    let recv=S.inv.filter(i=>i.s==='received');
+    let avgInc=0;
+    if(recv.length){let tot=recv.reduce((s,i)=>s+i.r,0);let dates=recv.map(i=>pd(i.d));let mn=new Date(Math.min(...dates)),mx=new Date(Math.max(...dates));let mo=Math.max(db(mx,mn)/30,1);avgInc=tot/mo}
+    let burn=fix+var_-avgInc;
+    let bal=S.cfg.balance+recv.reduce((s,i)=>s+(i.r||0),0)-S.exp.reduce((s,e)=>s+e.a,0);
+    let runway=burn<=0?Infinity:bal/burn;
+    let ccc=dso+S.cfg.dio-S.cfg.dpo;
+    let ar=calcAR();
+    let f=forecast();
+    
+    document.getElementById('metrics').innerHTML=`
+        <div class="metric ${bal>=0?'positive':'negative'}"><div class="value">$${bal.toLocaleString()}</div><div class="label">Balance</div></div>
+        <div class="metric neutral"><div class="value">${dso.toFixed(1)}</div><div class="label">DSO (days)</div></div>
+        <div class="metric ${burn<=0?'positive':'negative'}"><div class="value">$${Math.abs(burn).toLocaleString()}</div><div class="label">Burn/mo</div></div>
+        <div class="metric ${runway===Infinity?'positive':runway>6?'neutral':'negative'}"><div class="value">${runway===Infinity?'Inf':runway.toFixed(1)}</div><div class="label">Runway</div></div>
+        <div class="metric ${ccc<0?'positive':'negative'}"><div class="value">${ccc.toFixed(1)}</div><div class="label">CCC</div></div>
+        <div class="metric neutral"><div class="value">${S.cfg.dpo}</div><div class="label">DPO</div></div>`;
+    
+    // Charts
+    if(charts.f)charts.f.destroy();
+    charts.f=new Chart(document.getElementById('chartForecast'),{type:'bar',data:{labels:f.map(d=>d.mo),datasets:[{label:'Income',data:f.map(d=>d.inc),backgroundColor:'#16a34a'},{label:'Expenses',data:f.map(d=>-d.tot),backgroundColor:'#dc2626'}]},options:{responsive:true,maintainAspectRatio:false}});
+    
+    if(charts.b)charts.b.destroy();
+    charts.b=new Chart(document.getElementById('chartBalance'),{type:'line',data:{labels:f.map(d=>d.mo),datasets:[{label:'Balance',data:f.map(d=>d.bal),borderColor:'#2563eb',fill:true,backgroundColor:'rgba(37,99,235,.1)',tension:.3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}});
+    
+    let cats={};S.exp.forEach(e=>{cats[e.cat]=(cats[e.cat]||0)+e.a});S.costs.forEach(c=>{cats[c.n]=(cats[c.n]||0)+c.a});
+    if(charts.e)charts.e.destroy();
+    charts.e=new Chart(document.getElementById('chartExpense'),{type:'doughnut',data:{labels:Object.keys(cats),datasets:[{data:Object.values(cats),backgroundColor:['#2563eb','#16a34a','#d97706','#dc2626','#7c3aed','#0891b2','#be185d','#65a30d']}]},options:{responsive:true,maintainAspectRatio:false}});
+    
+    if(charts.a)charts.a.destroy();
+    charts.a=new Chart(document.getElementById('chartAR'),{type:'bar',data:{labels:Object.keys(ar),datasets:[{label:'Amount',data:Object.values(ar),backgroundColor:['#16a34a','#d97706','#ea580c','#dc2626']}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}});
+}
+
+function showToast(m,t){let e=document.createElement('div');e.className='toast '+t;e.textContent=m;document.body.appendChild(e);setTimeout(()=>e.remove(),3000)}
+
+function init(){renderCosts();renderInv();renderExp();renderProj();recalc()}
+init();
+</script>
+</body>
+</html>

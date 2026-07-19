@@ -1,0 +1,469 @@
+"""
+Test Suite - Cash Flow Model Formula Validation
+================================================
+Auditoria senior: Todos los calculos verificados contra definiciones estandar.
+
+Run: python test_suite.py
+"""
+
+import sys
+from datetime import datetime, timedelta
+from cash_flow_model import (
+    CashFlowModel, Invoice, Expense, Project,
+    PaymentStatus, ExpenseType
+)
+
+
+class TestResults:
+    def __init__(self):
+        self.passed = 0
+        self.failed = 0
+        self.errors = []
+    
+    def check(self, name, condition, detail=""):
+        if condition:
+            self.passed += 1
+            print(f"  [PASS] {name}")
+        else:
+            self.failed += 1
+            self.errors.append(f"{name}: {detail}")
+            print(f"  [FAIL] {name} - {detail}")
+    
+    def summary(self):
+        total = self.passed + self.failed
+        print(f"\n{'='*60}")
+        print(f"RESULTS: {self.passed}/{total} passed, {self.failed} failed")
+        if self.errors:
+            print(f"\nFAILURES:")
+            for e in self.errors:
+                print(f"  - {e}")
+        print(f"{'='*60}")
+        return self.failed == 0
+
+
+TODAY = datetime.now()
+
+def days_ago(n):
+    return TODAY - timedelta(days=n)
+
+def days_from_now(n):
+    return TODAY + timedelta(days=n)
+
+
+def test_dso():
+    """DSO = (AR / Credit Sales) x 30"""
+    print("\n[DSO - Days Sales Outstanding]")
+    results = TestResults()
+    
+    # Case 1: No invoices -> DSO = 0
+    m = CashFlowModel(initial_balance=100000)
+    results.check("No invoices => DSO=0", m.calculate_dso() == 0)
+    
+    # Case 2: All received -> DSO = 0 (no AR)
+    m = CashFlowModel(initial_balance=100000)
+    m.add_invoice(Invoice("I1", "C1", 10000, days_ago(40), days_ago(10), 30,
+                          PaymentStatus.RECEIVED, days_ago(8), 10000))
+    results.check("All received => DSO=0", m.calculate_dso() == 0)
+    
+    # Case 3: Single pending invoice (10 days old -> 95% prob)
+    m = CashFlowModel(initial_balance=100000)
+    m.add_invoice(Invoice("I1", "C1", 30000, days_ago(10), days_from_now(20), 30,
+                          PaymentStatus.PENDING))
+    # AR = 30000 * 0.95 = 28500
+    # DSO = (28500 / 30000) * 30 = 28.5
+    dso = m.calculate_dso()
+    results.check("Single pending 30k, 10d old => DSO=28.5", abs(dso - 28.5) < 0.1, f"got {dso}")
+    
+    # Case 4: Multiple invoices, mixed status
+    m = CashFlowModel(initial_balance=100000)
+    m.add_invoice(Invoice("I1", "C1", 20000, days_ago(40), days_ago(10), 30,
+                          PaymentStatus.RECEIVED, days_ago(8), 20000))
+    m.add_invoice(Invoice("I2", "C2", 40000, days_ago(10), days_from_now(20), 30,
+                          PaymentStatus.PENDING))
+    # AR = 40000 * 0.95 = 38000 (only pending counts)
+    # Total sales = 60000
+    # DSO = (38000/60000)*30 = 19.0
+    dso = m.calculate_dso()
+    results.check("Mixed status => DSO=19.0", abs(dso - 19.0) < 0.1, f"got {dso}")
+    
+    # Case 5: Late invoice (75 days old -> 65% prob)
+    m = CashFlowModel(initial_balance=100000)
+    m.add_invoice(Invoice("I1", "C1", 10000, days_ago(75), days_ago(45), 30,
+                          PaymentStatus.LATE, None, 0))
+    # AR = 10000 * 0.65 = 6500
+    # DSO = (6500/10000)*30 = 19.5
+    dso = m.calculate_dso()
+    results.check("Late invoice 75d => DSO~19.5", abs(dso - 19.5) < 1.0, f"got {dso}")
+    
+    # Case 6: DSO raw (no collection weighting)
+    # DSO = (AR / Total Sales) * 30. If AR = Sales, DSO = 30.
+    m = CashFlowModel(initial_balance=100000)
+    m.add_invoice(Invoice("I1", "C1", 50000, days_ago(10), days_from_now(20), 30,
+                          PaymentStatus.PENDING))
+    dso_raw = m.calculate_dso_raw()
+    results.check("DSO raw = 30.0 (AR=Sales => DSO=period)", abs(dso_raw - 30.0) < 0.1, f"got {dso_raw}")
+    
+    return results
+
+
+def test_dpo():
+    """DPO configurable, default 30"""
+    print("\n[DPO - Days Payable Outstanding]")
+    results = TestResults()
+    
+    m = CashFlowModel()
+    results.check("Default DPO=30", m.dpo_days == 30)
+    
+    m.set_dpo_days(45)
+    results.check("Set DPO=45", m.dpo_days == 45)
+    
+    m.set_dpo_days(0)
+    results.check("Set DPO=0", m.dpo_days == 0)
+    
+    try:
+        m.set_dpo_days(-5)
+        results.check("Negative DPO rejected", False, "Should have raised ValueError")
+    except ValueError:
+        results.check("Negative DPO rejected", True)
+    
+    return results
+
+
+def test_dio():
+    """DIO configurable, default 0"""
+    print("\n[DIO - Days Inventory Outstanding]")
+    results = TestResults()
+    
+    m = CashFlowModel()
+    results.check("Default DIO=0", m.dio_days == 0)
+    
+    m.set_dio_days(15)
+    results.check("Set DIO=15", m.dio_days == 15)
+    
+    return results
+
+
+def test_ccc():
+    """CCC = DSO + DIO - DPO"""
+    print("\n[CCC - Cash Conversion Cycle]")
+    results = TestResults()
+    
+    m = CashFlowModel(initial_balance=100000)
+    m.set_dpo_days(30)
+    m.set_dio_days(0)
+    m.add_invoice(Invoice("I1", "C1", 10000, days_ago(10), days_from_now(20), 30,
+                          PaymentStatus.PENDING))
+    dso = m.calculate_dso()
+    ccc = m.calculate_cash_conversion_cycle()
+    expected = dso + 0 - 30
+    results.check(f"CCC = DSO({dso}) + DIO(0) - DPO(30) = {expected}", abs(ccc - expected) < 0.1, f"got {ccc}")
+    
+    m.set_dio_days(15)
+    ccc = m.calculate_cash_conversion_cycle()
+    expected = dso + 15 - 30
+    results.check(f"CCC with DIO=15 => {expected}", abs(ccc - expected) < 0.1, f"got {ccc}")
+    
+    return results
+
+
+def test_burn_rate():
+    """Burn Rate = Monthly Expenses - Monthly Income"""
+    print("\n[Burn Rate]")
+    results = TestResults()
+    
+    m = CashFlowModel(initial_balance=100000)
+    m.set_monthly_fixed_costs({'rent': 5000, 'salaries': 20000})
+    burn = m.calculate_burn_rate()
+    results.check("Fixed 25k, no income => burn=25000", abs(burn - 25000) < 0.1, f"got {burn}")
+    
+    m = CashFlowModel(initial_balance=100000)
+    m.set_monthly_fixed_costs({'rent': 5000})
+    m.add_expense(Expense("E1", "Cloud", 1000, TODAY, ExpenseType.VARIABLE, "Infra", True))
+    m.add_expense(Expense("E2", "Processing", 500, TODAY, ExpenseType.VARIABLE, "Infra", True))
+    burn = m.calculate_burn_rate()
+    results.check("Fixed 5k + Variable 1.5k => burn=6500", abs(burn - 6500) < 0.1, f"got {burn}")
+    
+    m = CashFlowModel(initial_balance=100000)
+    m.set_monthly_fixed_costs({'rent': 5000})
+    m.add_invoice(Invoice("I1", "C1", 30000, days_ago(40), days_ago(10), 30,
+                          PaymentStatus.RECEIVED, days_ago(8), 30000))
+    m.add_invoice(Invoice("I2", "C2", 30000, days_ago(70), days_ago(40), 30,
+                          PaymentStatus.RECEIVED, days_ago(38), 30000))
+    burn = m.calculate_burn_rate()
+    results.check("Income > expenses => negative burn", burn < 0, f"got {burn}")
+    
+    m = CashFlowModel(initial_balance=100000)
+    m.set_monthly_fixed_costs({'rent': 5000})
+    m.add_expense(Expense("E1", "Legal", 10000, TODAY, ExpenseType.ONE_TIME, "Legal", False))
+    burn = m.calculate_burn_rate()
+    results.check("One-time excluded from burn", abs(burn - 5000) < 0.1, f"got {burn}")
+    
+    return results
+
+
+def test_runway():
+    """Runway = Balance / Burn Rate"""
+    print("\n[Runway]")
+    results = TestResults()
+    
+    m = CashFlowModel(initial_balance=100000)
+    m.set_monthly_fixed_costs({'rent': 5000})
+    m.add_invoice(Invoice("I1", "C1", 50000, days_ago(10), days_from_now(20), 30,
+                          PaymentStatus.RECEIVED, days_ago(8), 50000))
+    runway = m.calculate_runway()
+    results.check("Cash positive => infinite runway", runway == float('inf'))
+    
+    m = CashFlowModel(initial_balance=100000)
+    m.set_monthly_fixed_costs({'rent': 10000})
+    runway = m.calculate_runway()
+    results.check("100k balance / 10k burn => 10 months", abs(runway - 10.0) < 0.1, f"got {runway}")
+    
+    m = CashFlowModel(initial_balance=0)
+    m.set_monthly_fixed_costs({'rent': 10000})
+    runway = m.calculate_runway()
+    results.check("Zero balance => runway=0", runway == 0)
+    
+    return results
+
+
+def test_collection_probability():
+    """Collection probability by aging bucket"""
+    print("\n[Collection Probability]")
+    results = TestResults()
+    
+    inv = Invoice("I1", "C1", 10000, days_ago(10), days_from_now(20), 30,
+                  PaymentStatus.RECEIVED, TODAY, 10000)
+    results.check("Received => 100%", inv.collection_probability == 1.0)
+    
+    inv = Invoice("I1", "C1", 10000, days_ago(120), days_ago(90), 30,
+                  PaymentStatus.DEFAULTED)
+    results.check("Defaulted => 0%", inv.collection_probability == 0.0)
+    
+    inv = Invoice("I1", "C1", 10000, days_ago(10), days_from_now(20), 30,
+                  PaymentStatus.PENDING)
+    results.check("0-30 days => 95%", inv.collection_probability == 0.95)
+    
+    inv = Invoice("I1", "C1", 10000, days_ago(45), days_ago(15), 30,
+                  PaymentStatus.PENDING)
+    results.check("31-60 days => 85%", inv.collection_probability == 0.85)
+    
+    inv = Invoice("I1", "C1", 10000, days_ago(75), days_ago(45), 30,
+                  PaymentStatus.PENDING)
+    results.check("61-90 days => 65%", inv.collection_probability == 0.65)
+    
+    inv = Invoice("I1", "C1", 10000, days_ago(120), days_ago(90), 30,
+                  PaymentStatus.PENDING)
+    results.check("90+ days => 40%", inv.collection_probability == 0.40)
+    
+    inv = Invoice("I1", "C1", 10000, days_ago(10), days_from_now(20), 30,
+                  PaymentStatus.PENDING)
+    inv._collection_rate_override = 0.75
+    results.check("Override field => 75%", inv.collection_probability == 0.75)
+    
+    return results
+
+
+def test_tax_estimation():
+    """Quarterly tax payments in months 3,6,9,12"""
+    print("\n[Tax Estimation]")
+    results = TestResults()
+    
+    m = CashFlowModel(initial_balance=1000000)
+    m.set_monthly_fixed_costs({'cost': 10000})
+    m.set_tax_rate(0.25)
+    
+    # Add income that falls in month 2 (September = quarter end)
+    # Invoice issued today, due in 60 days -> expected payment ~month 2
+    m.add_invoice(Invoice("I1", "C1", 50000, days_ago(5), days_from_now(65), 60,
+                          PaymentStatus.PENDING))
+    
+    forecast = m.forecast_cash_flow(months=12)
+    
+    # Check which months have tax > 0
+    tax_months = [i for i, row in forecast.iterrows() if row['tax_expenses'] > 0]
+    
+    # Tax should appear in quarter-end months
+    results.check("Tax calculated in some months", len(tax_months) > 0, f"got months {tax_months}")
+    
+    # Verify quarterly pattern: tax should appear every 3 months
+    if len(tax_months) >= 2:
+        gaps = [tax_months[i+1] - tax_months[i] for i in range(len(tax_months)-1)]
+        results.check("Tax is quarterly (3-month gaps)", all(g == 3 for g in gaps), f"gaps={gaps}")
+    
+    return results
+
+
+def test_milestone_deduplication():
+    """Milestone-invoice deduplication"""
+    print("\n[Milestone Deduplication]")
+    results = TestResults()
+    
+    # Case 1: Milestone with explicit invoice_id -> excluded
+    m = CashFlowModel(initial_balance=100000)
+    m.add_project(Project("P1", "Client A", 50000, days_ago(20), days_from_now(10),
+                          [{'name': 'MS1', 'amount': 25000, 'date': days_from_now(5),
+                            'paid': False, 'invoice_id': 'INV-001'}], 0, 50))
+    m.add_invoice(Invoice("INV-001", "Client A", 25000, days_ago(5),
+                          days_from_now(25), 30, PaymentStatus.PENDING))
+    
+    forecast = m.forecast_cash_flow(months=1)
+    income = forecast.iloc[0]['projected_income']
+    # Invoice contributes: 25000 * 0.95 = 23750
+    # Milestone excluded
+    results.check("Linked milestone excluded", income < 25000, f"income={income}")
+    
+    # Case 2: Milestone without invoice_id, amount matches -> excluded (fallback)
+    m = CashFlowModel(initial_balance=100000)
+    m.add_project(Project("P1", "Client A", 50000, days_ago(20), days_from_now(10),
+                          [{'name': 'MS1', 'amount': 25000, 'date': days_from_now(5),
+                            'paid': False}], 0, 50))
+    m.add_invoice(Invoice("INV-001", "Client A", 25000, days_ago(5),
+                          days_from_now(25), 30, PaymentStatus.PENDING))
+    
+    forecast = m.forecast_cash_flow(months=1)
+    income = forecast.iloc[0]['projected_income']
+    results.check("Amount-matched milestone excluded (fallback)", income < 25000, f"income={income}")
+    
+    # Case 3: Milestone with different amount -> both counted
+    # Invoice expected payment and milestone both in current month
+    m = CashFlowModel(initial_balance=100000)
+    m.add_project(Project("P1", "Client A", 50000, days_ago(20), days_from_now(10),
+                          [{'name': 'MS1', 'amount': 30000, 'date': days_from_now(5),
+                            'paid': False}], 0, 50))
+    # Invoice with 5-day terms -> expected payment in ~5 days (same month as milestone)
+    m.add_invoice(Invoice("INV-001", "Client A", 25000, days_ago(2),
+                          days_from_now(5), 5, PaymentStatus.PENDING))
+    
+    forecast = m.forecast_cash_flow(months=1)
+    income = forecast.iloc[0]['projected_income']
+    # Invoice: 25000 * 0.95 = 23750
+    # Milestone: 30000 (included, different amount)
+    # Total: 53750
+    results.check("Unmatched milestone + invoice both counted", income >= 50000, f"income={income}")
+    
+    return results
+
+
+def test_edge_cases():
+    """Edge cases and boundary conditions"""
+    print("\n[Edge Cases]")
+    results = TestResults()
+    
+    m = CashFlowModel(initial_balance=0)
+    results.check("Empty model balance=0", m.get_current_balance() == 0)
+    results.check("Empty model DSO=0", m.calculate_dso() == 0)
+    results.check("Empty model burn=0", m.calculate_burn_rate() == 0)
+    
+    try:
+        CashFlowModel(initial_balance=-1000)
+        results.check("Negative balance rejected", False)
+    except ValueError:
+        results.check("Negative balance rejected", True)
+    
+    try:
+        Invoice("I1", "C1", 0, TODAY, TODAY, 30)
+        results.check("Zero amount invoice rejected", False)
+    except ValueError:
+        results.check("Zero amount invoice rejected", True)
+    
+    try:
+        Invoice("I1", "C1", 1000, TODAY, TODAY, 30,
+                PaymentStatus.RECEIVED, TODAY, 2000)
+        results.check("Received > amount rejected", False)
+    except ValueError:
+        results.check("Received > amount rejected", True)
+    
+    try:
+        m = CashFlowModel()
+        m.set_tax_rate(1.5)
+        results.check("Tax rate >1 rejected", False)
+    except ValueError:
+        results.check("Tax rate >1 rejected", True)
+    
+    return results
+
+
+def test_full_scenario():
+    """End-to-end scenario validation"""
+    print("\n[Full Scenario - E2E]")
+    results = TestResults()
+    
+    m = CashFlowModel(initial_balance=50000)
+    m.set_dpo_days(30)
+    m.set_tax_rate(0.25)
+    m.set_monthly_fixed_costs({'rent': 3000, 'salaries': 15000})
+    
+    m.add_expense(Expense("E1", "Cloud", 800, TODAY, ExpenseType.VARIABLE, "Infra", True))
+    
+    m.add_invoice(Invoice("I1", "Client A", 20000, days_ago(40), days_ago(10), 30,
+                          PaymentStatus.RECEIVED, days_ago(8), 20000))
+    
+    m.add_invoice(Invoice("I2", "Client B", 30000, days_ago(5), days_from_now(25), 30,
+                          PaymentStatus.PENDING))
+    
+    m.add_project(Project("P1", "Client C", 60000, days_ago(20), days_from_now(40),
+                          [{'name': 'Delivery', 'amount': 60000,
+                            'date': days_from_now(30), 'paid': False}],
+                          0, 40))
+    
+    try:
+        balance = m.get_current_balance()
+        dso = m.calculate_dso()
+        burn = m.calculate_burn_rate()
+        runway = m.calculate_runway()
+        ccc = m.calculate_cash_conversion_cycle()
+        forecast = m.forecast_cash_flow(months=12)
+        ar = m.get_accounts_receivable()
+        dashboard = m.generate_dashboard_data()
+        
+        results.check("All metrics compute", True)
+        # Balance = 50000 + 20000 - 800 = 69200 (only received - expenses)
+        results.check("Balance correct", abs(balance - 69200) < 0.1, f"got {balance}")
+        results.check("Forecast has 12 rows", len(forecast) == 12)
+        results.check("Dashboard has required keys",
+                      all(k in dashboard for k in ['dso','burn_rate','runway_months','cash_conversion_cycle']),
+                      f"missing keys: {[k for k in ['dso','burn_rate','runway_months','cash_conversion_cycle'] if k not in dashboard]}")
+    except Exception as e:
+        results.check("Full scenario exception", False, str(e))
+    
+    return results
+
+
+def main():
+    print("=" * 60)
+    print("CASH FLOW MODEL - Formula Validation Suite")
+    print("=" * 60)
+    
+    all_results = []
+    all_results.append(test_dso())
+    all_results.append(test_dpo())
+    all_results.append(test_dio())
+    all_results.append(test_ccc())
+    all_results.append(test_burn_rate())
+    all_results.append(test_runway())
+    all_results.append(test_collection_probability())
+    all_results.append(test_tax_estimation())
+    all_results.append(test_milestone_deduplication())
+    all_results.append(test_edge_cases())
+    all_results.append(test_full_scenario())
+    
+    total_pass = sum(r.passed for r in all_results)
+    total_fail = sum(r.failed for r in all_results)
+    total = total_pass + total_fail
+    
+    print(f"\n{'='*60}")
+    print(f"TOTAL: {total_pass}/{total} passed, {total_fail} failed")
+    
+    if total_fail > 0:
+        print(f"\nFAILED TESTS:")
+        for r in all_results:
+            for e in r.errors:
+                print(f"  - {e}")
+        sys.exit(1)
+    else:
+        print("ALL TESTS PASSED")
+        sys.exit(0)
+
+
+if __name__ == '__main__':
+    main()

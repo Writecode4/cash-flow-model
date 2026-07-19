@@ -1,0 +1,2 @@
+project_id,client,total_value,start_date,estimated_end_date,payments_received,work_completion_pct,milestones_json
+PRJ-001,Client A,80000,2026-01-01,2026-06-30,0,25.0,"[{""name"": ""Phase 1"", ""amount"": 30000, ""date"": ""2026-03-01"", ""paid"": false}, {""name"": ""Phase 2"", ""amount"": 50000, ""date"": ""2026-06-01"", ""paid"": false}]"

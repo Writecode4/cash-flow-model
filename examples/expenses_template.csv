@@ -1,0 +1,3 @@
+expense_id,description,amount,date,expense_type,category,recurring
+EXP-001,Cloud hosting,500,2026-01-15,variable,Infrastructure,true
+EXP-002,Legal review,2000,2026-01-10,one_time,Legal,false

@@ -1,0 +1,61 @@
+{
+  "name": "My Business Scenario",
+  "initial_balance": 75000,
+  "dpo_days": 30,
+  "dio_days": 0,
+  "tax_rate": 0.25,
+  "monthly_fixed_costs": {
+    "rent": 3500,
+    "salaries": 25000,
+    "utilities": 500
+  },
+  "invoices": [
+    {
+      "invoice_id": "INV-001",
+      "client": "Client A",
+      "amount": 25000,
+      "issue_date": "2026-01-01",
+      "due_date": "2026-01-31",
+      "payment_terms_days": 30,
+      "status": "pending",
+      "received_date": null,
+      "received_amount": 0
+    }
+  ],
+  "expenses": [
+    {
+      "expense_id": "EXP-001",
+      "description": "Cloud hosting",
+      "amount": 500,
+      "date": "2026-01-15",
+      "expense_type": "variable",
+      "category": "Infrastructure",
+      "recurring": true
+    }
+  ],
+  "projects": [
+    {
+      "project_id": "PRJ-001",
+      "client": "Client A",
+      "total_value": 80000,
+      "start_date": "2026-01-01",
+      "estimated_end_date": "2026-06-30",
+      "milestones": [
+        {
+          "name": "Phase 1",
+          "amount": 30000,
+          "date": "2026-03-01",
+          "paid": false
+        },
+        {
+          "name": "Phase 2",
+          "amount": 50000,
+          "date": "2026-06-01",
+          "paid": false
+        }
+      ],
+      "payments_received": 0,
+      "work_completion_pct": 25.0
+    }
+  ]
+}

@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cash Flow Model - Interactive Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --danger: #dc2626;
+            --success: #16a34a;
+            --warning: #d97706;
+            --bg: #f8fafc;
+            --card: #ffffff;
+            --border: #e2e8f0;
+            --text: #1e293b;
+            --muted: #64748b;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        header { background: var(--primary); color: white; padding: 20px 0; margin-bottom: 20px; }
+        header h1 { text-align: center; }
+        .tabs { display: flex; gap: 4px; margin-bottom: 20px; flex-wrap: wrap; }
+        .tab { padding: 10px 20px; border: 1px solid var(--border); background: var(--card); cursor: pointer; border-radius: 6px 6px 0 0; font-size: 14px; }
+        .tab.active { background: var(--primary); color: white; border-color: var(--primary); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+        .card h2 { font-size: 18px; margin-bottom: 15px; color: var(--primary); }
+        .card h3 { font-size: 15px; margin: 15px 0 10px; color: var(--muted); }
+        .grid { display: grid; gap: 15px; }
+        .grid-2 { grid-template-columns: 1fr 1fr; }
+        .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+        .grid-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+        @media (max-width: 768px) { .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; } }
+        label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 4px; color: var(--muted); }
+        input, select { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+        input:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+        .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-success { background: var(--success); color: white; }
+        .btn-warning { background: var(--warning); color: white; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .btn:hover { opacity: 0.9; }
+        .btn-group { display: flex; gap: 8px; margin-top: 15px; flex-wrap: wrap; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+        th { background: var(--bg); font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; }
+        tr:hover { background: #f1f5f9; }
+        .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .metric { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 15px; text-align: center; }
+        .metric .value { font-size: 28px; font-weight: 700; }
+        .metric .label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+        .metric.positive .value { color: var(--success); }
+        .metric.negative .value { color: var(--danger); }
+        .metric.neutral .value { color: var(--primary); }
+        .chart-container { position: relative; height: 300px; margin-top: 15px; }
+        .empty-state { text-align: center; padding: 40px; color: var(--muted); }
+        .import-export { display: flex; gap: 10px; align-items: center; }
+        .toast { position: fixed; bottom: 20px; right: 20px; padding: 12px 20px; border-radius: 8px; color: white; font-size: 14px; z-index: 1000; animation: slideIn 0.3s ease; }
+        .toast.success { background: var(--success); }
+        .toast.error { background: var(--danger); }
+        @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .remove-row { color: var(--danger); cursor: pointer; font-weight: bold; }
+        .remove-row:hover { text-decoration: underline; }
+        .scenario-list { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 15px; }
+        .scenario-chip { padding: 6px 12px; border: 1px solid var(--border); border-radius: 20px; cursor: pointer; font-size: 13px; }
+        .scenario-chip.active { background: var(--primary); color: white; border-color: var(--primary); }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Cash Flow Model - Interactive Dashboard</h1>
+    </header>
+
+    <div class="container">
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('config')">Configuration</div>
+            <div class="tab" onclick="switchTab('invoices')">Invoices</div>
+            <div class="tab" onclick="switchTab('expenses')">Expenses</div>
+            <div class="tab" onclick="switchTab('projects')">Projects</div>
+            <div class="tab" onclick="switchTab('dashboard')">Dashboard</div>
+            <div class="tab" onclick="switchTab('scenarios')">Scenarios</div>
+        </div>
+
+        <!-- CONFIG TAB -->
+        <div id="tab-config" class="tab-content active">
+            <div class="card">
+                <h2>Business Configuration</h2>
+                <div class="grid grid-4">
+                    <div>
+                        <label>Initial Cash Balance ($)</label>
+                        <input type="number" id="initial_balance" value="75000" onchange="saveAndRecalculate()">
+                    </div>
+                    <div>
+                        <label>DPO Days</label>
+                        <input type="number" id="dpo_days" value="30" onchange="saveAndRecalculate()">
+                    </div>
+                    <div>
+                        <label>DIO Days (0 for services)</label>
+                        <input type="number" id="dio_days" value="0" onchange="saveAndRecalculate()">
+                    </div>
+                    <div>
+                        <label>Tax Rate (%)</label>
+                        <input type="number" id="tax_rate" value="25" step="0.1" onchange="saveAndRecalculate()">
+                    </div>
+                </div>
+
+                <h3>Monthly Fixed Costs</h3>
+                <div id="fixed-costs-container">
+                    <table>
+                        <thead><tr><th>Name</th><th>Amount ($)</th><th></th></tr></thead>
+                        <tbody id="fixed-costs-body"></tbody>
+                    </table>
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-primary btn-sm" onclick="addFixedCost()">+ Add Cost</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- INVOICES TAB -->
+        <div id="tab-invoices" class="tab-content">
+            <div class="card">
+                <h2>Invoices</h2>
+                <div style="overflow-x: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th><th>Client</th><th>Amount</th><th>Issue Date</th>
+                                <th>Terms (days)</th><th>Status</th><th>Received</th><th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="invoices-body"></tbody>
+                    </table>
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-primary btn-sm" onclick="addInvoice()">+ Add Invoice</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- EXPENSES TAB -->
+        <div id="tab-expenses" class="tab-content">
+            <div class="card">
+                <h2>Expenses</h2>
+                <div style="overflow-x: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th><th>Description</th><th>Amount</th><th>Date</th>
+                                <th>Type</th><th>Category</th><th>Recurring</th><th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="expenses-body"></tbody>
+                    </table>
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-primary btn-sm" onclick="addExpense()">+ Add Expense</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- PROJECTS TAB -->
+        <div id="tab-projects" class="tab-content">
+            <div class="card">
+                <h2>Projects</h2>
+                <div id="projects-container"></div>
+                <div class="btn-group">
+                    <button class="btn btn-primary btn-sm" onclick="addProject()">+ Add Project</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- DASHBOARD TAB -->
+        <div id="tab-dashboard" class="tab-content">
+            <div class="metric-grid" id="metrics-container"></div>
+            
+            <div class="grid grid-2">
+                <div class="card">
+                    <h2>Cash Flow Forecast</h2>
+                    <div class="chart-container"><canvas id="forecastChart"></canvas></div>
+                </div>
+                <div class="card">
+                    <h2>Cumulative Balance</h2>
+                    <div class="chart-container"><canvas id="balanceChart"></canvas></div>
+                </div>
+            </div>
+
+            <div class="grid grid-2">
+                <div class="card">
+                    <h2>Expense Breakdown</h2>
+                    <div class="chart-container"><canvas id="expenseChart"></canvas></div>
+                </div>
+                <div class="card">
+                    <h2>AR Aging</h2>
+                    <div class="chart-container"><canvas id="arChart"></canvas></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Scenario Comparison</h2>
+                <div class="chart-container"><canvas id="scenarioChart"></canvas></div>
+            </div>
+        </div>
+
+        <!-- SCENARIOS TAB -->
+        <div id="tab-scenarios" class="tab-content">
+            <div class="card">
+                <h2>Saved Scenarios</h2>
+                <div class="scenario-list" id="scenario-list"></div>
+                <div class="btn-group">
+                    <button class="btn btn-success btn-sm" onclick="saveCurrentScenario()">Save Current</button>
+                    <button class="btn btn-primary btn-sm" onclick="loadSampleScenario()">Load Sample</button>
+                    <div class="import-export">
+                        <input type="file" id="importFile" accept=".json" style="display:none" onchange="importScenario(event)">
+                        <button class="btn btn-warning btn-sm" onclick="document.getElementById('importFile').click()">Import JSON</button>
+                        <button class="btn btn-warning btn-sm" onclick="exportJSON()">Export JSON</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // ============== STATE ==============
+    let state = {
+        config: { initial_balance: 75000, dpo_days: 30, dio_days: 0, tax_rate: 25 },
+        fixed_costs: [
+            { name: 'Salaries', amount: 25000 },
+            { name: 'Rent', amount: 3500 },
+            { name: 'Tools & Software', amount: 1200 },
+            { name: 'Cloud Infrastructure', amount: 800 },
+            { name: 'Insurance', amount: 500 },
+            { name: 'Marketing', amount: 1000 }
+        ],
+        invoices: [],
+        expenses: [],
+        projects: []
+    };
+
+    let charts = {};
+    const today = new Date().toISOString().split('T')[0];
+
+    // ============== INIT ==============
+    function init() {
+        loadFromStorage();
+        renderAll();
+        recalculate();
+    }
+
+    // ============== STORAGE ==============
+    function saveToStorage() { localStorage.setItem('cashflow_state', JSON.stringify(state)); }
+    function loadFromStorage() {
+        const saved = localStorage.getItem('cashflow_state');
+        if (saved) { state = JSON.parse(saved); }
+    }
+
+    // ============== TABS ==============
+    function switchTab(name) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+        event.target.classList.add('active');
+        document.getElementById('tab-' + name).classList.add('active');
+        if (name === 'dashboard') recalculate();
+    }
+
+    // ============== FIXED COSTS ==============
+    function renderFixedCosts() {
+        const tbody = document.getElementById('fixed-costs-body');
+        tbody.innerHTML = state.fixed_costs.map((c, i) => `
+            <tr>
+                <td><input value="${c.name}" onchange="state.fixed_costs[${i}].name=this.value;saveAndRecalculate()"></td>
+                <td><input type="number" value="${c.amount}" onchange="state.fixed_costs[${i}].amount=+this.value;saveAndRecalculate()"></td>
+                <td><span class="remove-row" onclick="state.fixed_costs.splice(${i},1);renderFixedCosts();saveAndRecalculate()">x</span></td>
+            </tr>
+        `).join('');
+    }
+    function addFixedCost() {
+        state.fixed_costs.push({ name: 'New Cost', amount: 0 });
+        renderFixedCosts();
+        saveAndRecalculate();
+    }
+
+    // ============== INVOICES ==============
+    function renderInvoices() {
+        const tbody = document.getElementById('invoices-body');
+        tbody.innerHTML = state.invoices.map((inv, i) => `
+            <tr>
+                <td><input value="${inv.invoice_id}" onchange="state.invoices[${i}].invoice_id=this.value"></td>
+                <td><input value="${inv.client}" onchange="state.invoices[${i}].client=this.value"></td>
+                <td><input type="number" value="${inv.amount}" onchange="state.invoices[${i}].amount=+this.value;saveAndRecalculate()"></td>
+                <td><input type="date" value="${inv.issue_date}" onchange="state.invoices[${i}].issue_date=this.value;saveAndRecalculate()"></td>
+                <td><input type="number" value="${inv.payment_terms_days}" onchange="state.invoices[${i}].payment_terms_days=+this.value;saveAndRecalculate()"></td>
+                <td>
+                    <select onchange="state.invoices[${i}].status=this.value;saveAndRecalculate()">
+                        <option value="pending" ${inv.status==='pending'?'selected':''}>Pending</option>
+                        <option value="received" ${inv.status==='received'?'selected':''}>Received</option>
+                        <option value="late" ${inv.status==='late'?'selected':''}>Late</option>
+                        <option value="defaulted" ${inv.status==='defaulted'?'selected':''}>Defaulted</option>
+                    </select>
+                </td>
+                <td><input type="number" value="${inv.received_amount||0}" onchange="state.invoices[${i}].received_amount=+this.value;saveAndRecalculate()"></td>
+                <td><span class="remove-row" onclick="state.invoices.splice(${i},1);renderInvoices();saveAndRecalculate()">x</span></td>
+            </tr>
+        `).join('');
+    }
+    function addInvoice() {
+        state.invoices.push({
+            invoice_id: 'INV-' + String(state.invoices.length + 1).padStart(3, '0'),
+            client: 'Client', amount: 0, issue_date: today,
+            payment_terms_days: 30, status: 'pending', received_amount: 0
+        });
+        renderInvoices();
+        saveAndRecalculate();
+    }
+
+    // ============== EXPENSES ==============
+    function renderExpenses() {
+        const tbody = document.getElementById('expenses-body');
+        tbody.innerHTML = state.expenses.map((exp, i) => `
+            <tr>
+                <td><input value="${exp.expense_id}" onchange="state.expenses[${i}].expense_id=this.value"></td>
+                <td><input value="${exp.description}" onchange="state.expenses[${i}].description=this.value"></td>
+                <td><input type="number" value="${exp.amount}" onchange="state.expenses[${i}].amount=+this.value;saveAndRecalculate()"></td>
+                <td><input type="date" value="${exp.date}" onchange="state.expenses[${i}].date=this.value"></td>
+                <td>
+                    <select onchange="state.expenses[${i}].expense_type=this.value">
+                        <option value="variable" ${exp.expense_type==='variable'?'selected':''}>Variable</option>
+                        <option value="fixed" ${exp.expense_type==='fixed'?'selected':''}>Fixed</option>
+                        <option value="one_time" ${exp.expense_type==='one_time'?'selected':''}>One-time</option>
+                    </select>
+                </td>
+                <td><input value="${exp.category}" onchange="state.expenses[${i}].category=this.value"></td>
+                <td>
+                    <select onchange="state.expenses[${i}].recurring=this.value==='true';saveAndRecalculate()">
+                        <option value="true" ${exp.recurring?'selected':''}>Yes</option>
+                        <option value="false" ${!exp.recurring?'selected':''}>No</option>
+                    </select>
+                </td>
+                <td><span class="remove-row" onclick="state.expenses.splice(${i},1);renderExpenses();saveAndRecalculate()">x</span></td>
+            </tr>
+        `).join('');
+    }
+    function addExpense() {
+        state.expenses.push({
+            expense_id: 'EXP-' + String(state.expenses.length + 1).padStart(3, '0'),
+            description: 'New Expense', amount: 0, date: today,
+            expense_type: 'variable', category: 'General', recurring: false
+        });
+        renderExpenses();
+        saveAndRecalculate();
+    }
+
+    // ============== PROJECTS ==============
+    function renderProjects() {
+        const container = document.getElementById('projects-container');
+        container.innerHTML = state.projects.map((proj, pi) => `
+            <div class="card" style="margin-bottom:15px; border-left: 4px solid var(--primary);">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                    <h3 style="margin:0;">${proj.project_id} - ${proj.client}</h3>
+                    <span class="remove-row" onclick="state.projects.splice(${pi},1);renderProjects();saveAndRecalculate()">Remove</span>
+                </div>
+                <div class="grid grid-4">
+                    <div><label>Project ID</label><input value="${proj.project_id}" onchange="state.projects[${pi}].project_id=this.value;renderProjects()"></div>
+                    <div><label>Client</label><input value="${proj.client}" onchange="state.projects[${pi}].client=this.value;renderProjects()"></div>
+                    <div><label>Total Value ($)</label><input type="number" value="${proj.total_value}" onchange="state.projects[${pi}].total_value=+this.value;saveAndRecalculate()"></div>
+                    <div><label>Work Completion %</label><input type="number" value="${proj.work_completion_pct}" onchange="state.projects[${pi}].work_completion_pct=+this.value;saveAndRecalculate()"></div>
+                </div>
+                <div class="grid grid-3" style="margin-top:10px;">
+                    <div><label>Start Date</label><input type="date" value="${proj.start_date}" onchange="state.projects[${pi}].start_date=this.value"></div>
+                    <div><label>End Date</label><input type="date" value="${proj.estimated_end_date}" onchange="state.projects[${pi}].estimated_end_date=this.value"></div>
+                    <div><label>Payments Received ($)</label><input type="number" value="${proj.payments_received||0}" onchange="state.projects[${pi}].payments_received=+this.value;saveAndRecalculate()"></div>
+                </div>
+                <h3 style="margin-top:15px;">Milestones</h3>
+                <table>
+                    <thead><tr><th>Name</th><th>Amount</th><th>Date</th><th>Paid</th><th></th></tr></thead>
+                    <tbody>
+                        ${(proj.milestones||[]).map((ms, mi) => `
+                            <tr>
+                                <td><input value="${ms.name}" onchange="state.projects[${pi}].milestones[${mi}].name=this.value"></td>
+                                <td><input type="number" value="${ms.amount}" onchange="state.projects[${pi}].milestones[${mi}].amount=+this.value;saveAndRecalculate()"></td>
+                                <td><input type="date" value="${ms.date}" onchange="state.projects[${pi}].milestones[${mi}].date=this.value;saveAndRecalculate()"></td>
+                                <td><select onchange="state.projects[${pi}].milestones[${mi}].paid=this.value==='true';saveAndRecalculate()">
+                                    <option value="false" ${!ms.paid?'selected':''}>No</option>
+                                    <option value="true" ${ms.paid?'selected':''}>Yes</option>
+                                </select></td>
+                                <td><span class="remove-row" onclick="state.projects[${pi}].milestones.splice(${mi},1);renderProjects();saveAndRecalculate()">x</span></td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+                <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="addMilestone(${pi})">+ Add Milestone</button>
+            </div>
+        `).join('');
+    }
+    function addProject() {
+        state.projects.push({
+            project_id: 'PRJ-' + String(state.projects.length + 1).padStart(3, '0'),
+            client: 'Client', total_value: 0, start_date: today,
+            estimated_end_date: today, milestones: [], payments_received: 0, work_completion_pct: 0
+        });
+        renderProjects();
+        saveAndRecalculate();
+    }
+    function addMilestone(pi) {
+        if (!state.projects[pi].milestones) state.projects[pi].milestones = [];
+        state.projects[pi].milestones.push({ name: 'Milestone', amount: 0, date: today, paid: false });
+        renderProjects();
+        saveAndRecalculate();
+    }
+
+    // ============== CALCULATIONS (JS port of Python model) ==============
+    function parseDate(s) { return new Date(s + 'T00:00:00'); }
+    function daysBetween(a, b) { return Math.round((a - b) / 86400000); }
+    function addMonths(date, months) {
+        const d = new Date(date);
+        d.setMonth(d.getMonth() + months);
+        const day = Math.min(d.getDate(), new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate());
+        d.setDate(day);
+        return d;
+    }
+    function getMonthEnd(date) {
+        return new Date(date.getFullYear(), date.getMonth() + 1, 0);
+    }
+
+    function collectionProbability(inv) {
+        if (inv.status === 'received') return 1.0;
+        if (inv.status === 'defaulted') return 0.0;
+        const days = daysBetween(new Date(), parseDate(inv.issue_date));
+        if (days <= 30) return 0.95;
+        if (days <= 60) return 0.85;
+        if (days <= 90) return 0.65;
+        return 0.40;
+    }
+
+    function calculateDSO() {
+        const pending = state.invoices.filter(i => i.status === 'pending' || i.status === 'late');
+        const totalAR = pending.reduce((s, i) => s + i.amount * collectionProbability(i), 0);
+        const totalSales = state.invoices.reduce((s, i) => s + i.amount, 0);
+        if (totalSales === 0) return 0;
+        return (totalAR / totalSales) * 30;
+    }
+
+    function calculateBurnRate() {
+        const monthlyFixed = state.fixed_costs.reduce((s, c) => s + c.amount, 0);
+        const recurringVar = state.expenses.filter(e => e.expense_type === 'variable' && e.recurring);
+        const monthlyVar = recurringVar.reduce((s, e) => s + e.amount, 0);
+        const avgIncome = calcAvgMonthlyIncome();
+        return monthlyFixed + monthlyVar - avgIncome;
+    }
+
+    function calcAvgMonthlyIncome() {
+        const received = state.invoices.filter(i => i.status === 'received' && i.received_amount > 0);
+        if (received.length === 0) return 0;
+        const total = received.reduce((s, i) => s + i.received_amount, 0);
+        const dates = received.map(i => parseDate(i.issue_date));
+        const earliest = new Date(Math.min(...dates));
+        const latest = new Date(Math.max(...dates));
+        const months = Math.max(daysBetween(latest, earliest) / 30, 1);
+        return total / months;
+    }
+
+    function getInvoicedMilestoneIds() {
+        const invoiced = new Set();
+        const invoiceIds = new Set(state.invoices.map(i => i.invoice_id));
+        const byClient = {};
+        state.invoices.forEach(inv => {
+            if (!byClient[inv.client]) byClient[inv.client] = [];
+            byClient[inv.client].push(inv.amount);
+        });
+        state.projects.forEach(proj => {
+            (proj.milestones || []).forEach((ms, i) => {
+                const id = proj.project_id + '_m' + i;
+                if (ms.invoice_id && invoiceIds.has(ms.invoice_id)) { invoiced.add(id); return; }
+                const clientInvs = byClient[proj.client] || [];
+                if (clientInvs.some(a => Math.abs(a - ms.amount) < 0.01)) invoiced.add(id);
+            });
+        });
+        return invoiced;
+    }
+
+    function forecast(months = 12) {
+        const data = [];
+        let balance = state.config.initial_balance;
+        const invoiced = getInvoicedMilestoneIds();
+        const taxRate = state.config.tax_rate / 100;
+
+        for (let m = 0; m < months; m++) {
+            const forecastDate = addMonths(new Date(), m);
+            const monthStart = new Date(forecastDate.getFullYear(), forecastDate.getMonth(), 1);
+            const monthEnd = getMonthEnd(monthStart);
+
+            let income = 0;
+            state.invoices.forEach(inv => {
+                if (inv.status === 'pending' || inv.status === 'late') {
+                    const expected = parseDate(inv.issue_date);
+                    expected.setDate(expected.getDate() + inv.payment_terms_days);
+                    if (expected >= monthStart && expected <= monthEnd) {
+                        income += inv.amount * collectionProbability(inv);
+                    }
+                }
+            });
+
+            state.projects.forEach(proj => {
+                (proj.milestones || []).forEach((ms, i) => {
+                    const msDate = parseDate(ms.date);
+                    if (msDate >= monthStart && msDate <= monthEnd && !ms.paid) {
+                        const id = proj.project_id + '_m' + i;
+                        if (!invoiced.has(id)) income += ms.amount;
+                    }
+                });
+            });
+
+            const fixed = state.fixed_costs.reduce((s, c) => s + c.amount, 0);
+            const variable = state.expenses.filter(e => e.expense_type === 'variable' && e.recurring).reduce((s, e) => s + e.amount, 0);
+            const grossProfit = income - fixed - variable;
+            let tax = 0;
+            if (grossProfit > 0 && [2, 5, 8, 11].includes(forecastDate.getMonth())) {
+                tax = grossProfit * taxRate * 3;
+            }
+
+            const totalExpenses = fixed + variable + tax;
+            const net = income - totalExpenses;
+            balance += net;
+
+            data.push({
+                month: forecastDate.toISOString().slice(0, 7),
+                income, fixed, variable, tax, totalExpenses, net, balance
+            });
+        }
+        return data;
+    }
+
+    function calculateAR() {
+        const aging = { current: 0, '31-60': 0, '61-90': 0, '90+': 0 };
+        state.invoices.forEach(inv => {
+            if (inv.status === 'pending' || inv.status === 'late') {
+                const days = daysBetween(new Date(), parseDate(inv.issue_date));
+                if (days <= 30) aging.current += inv.amount;
+                else if (days <= 60) aging['31-60'] += inv.amount;
+                else if (days <= 90) aging['61-90'] += inv.amount;
+                else aging['90+'] += inv.amount;
+            }
+        });
+        return aging;
+    }
+
+    // ============== RECALCULATE & RENDER ==============
+    function saveAndRecalculate() {
+        state.config.initial_balance = +document.getElementById('initial_balance').value;
+        state.config.dpo_days = +document.getElementById('dpo_days').value;
+        state.config.dio_days = +document.getElementById('dio_days').value;
+        state.config.tax_rate = +document.getElementById('tax_rate').value;
+        saveToStorage();
+        recalculate();
+    }
+
+    function recalculate() {
+        const dso = calculateDSO();
+        const burn = calculateBurnRate();
+        const balance = state.config.initial_balance + state.invoices.filter(i => i.status === 'received').reduce((s, i) => s + (i.received_amount || 0), 0) - state.expenses.reduce((s, e) => s + e.amount, 0);
+        const runway = burn <= 0 ? Infinity : balance / burn;
+        const forecast = forecast();
+        const ar = calculateAR();
+        const ccc = dso + state.config.dio_days - state.config.dpo_days;
+
+        // Metrics
+        document.getElementById('metrics-container').innerHTML = `
+            <div class="metric ${balance >= 0 ? 'positive' : 'negative'}"><div class="value">$${balance.toLocaleString()}</div><div class="label">Current Balance</div></div>
+            <div class="metric neutral"><div class="value">${dso.toFixed(1)}</div><div class="label">DSO (days)</div></div>
+            <div class="metric ${burn <= 0 ? 'positive' : 'negative'}"><div class="value">$${Math.abs(burn).toLocaleString()}</div><div class="label">Burn Rate /mo</div></div>
+            <div class="metric ${runway === Infinity ? 'positive' : runway > 6 ? 'neutral' : 'negative'}"><div class="value">${runway === Infinity ? 'Inf' : runway.toFixed(1)}</div><div class="label">Runway (months)</div></div>
+            <div class="metric ${ccc < 0 ? 'positive' : 'negative'}"><div class="value">${ccc.toFixed(1)}</div><div class="label">CCC (days)</div></div>
+            <div class="metric neutral"><div class="value">${state.config.dpo_days}</div><div class="label">DPO (days)</div></div>
+        `;
+
+        // Charts
+        renderForecastChart(forecast);
+        renderBalanceChart(forecast);
+        renderExpenseChart();
+        renderARChart(ar);
+        renderScenarioChart();
+    }
+
+    // ============== CHARTS ==============
+    function renderForecastChart(data) {
+        const ctx = document.getElementById('forecastChart').getContext('2d');
+        if (charts.forecast) charts.forecast.destroy();
+        charts.forecast = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: data.map(d => d.month),
+                datasets: [
+                    { label: 'Income', data: data.map(d => d.income), backgroundColor: '#16a34a' },
+                    { label: 'Expenses', data: data.map(d => -d.totalExpenses), backgroundColor: '#dc2626' }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: true } } }
+        });
+    }
+
+    function renderBalanceChart(data) {
+        const ctx = document.getElementById('balanceChart').getContext('2d');
+        if (charts.balance) charts.balance.destroy();
+        charts.balance = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: data.map(d => d.month),
+                datasets: [{ label: 'Balance', data: data.map(d => d.balance), borderColor: '#2563eb', fill: true, backgroundColor: 'rgba(37,99,235,0.1)', tension: 0.3 }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+        });
+    }
+
+    function renderExpenseChart() {
+        const ctx = document.getElementById('expenseChart').getContext('2d');
+        if (charts.expense) charts.expense.destroy();
+        const cats = {};
+        state.expenses.forEach(e => { cats[e.category] = (cats[e.category] || 0) + e.amount; });
+        state.fixed_costs.forEach(c => { cats[c.name] = (cats[c.name] || 0) + c.amount; });
+        charts.expense = new Chart(ctx, {
+            type: 'doughnut',
+            data: { labels: Object.keys(cats), datasets: [{ data: Object.values(cats), backgroundColor: ['#2563eb','#16a34a','#d97706','#dc2626','#7c3aed','#0891b2','#be185d','#65a30d'] }] },
+            options: { responsive: true, maintainAspectRatio: false }
+        });
+    }
+
+    function renderARChart(ar) {
+        const ctx = document.getElementById('arChart').getContext('2d');
+        if (charts.ar) charts.ar.destroy();
+        charts.ar = new Chart(ctx, {
+            type: 'bar',
+            data: { labels: Object.keys(ar), datasets: [{ label: 'Amount', data: Object.values(ar), backgroundColor: ['#16a34a','#d97706','#ea580c','#dc2626'] }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+        });
+    }
+
+    function renderScenarioChart() {
+        const ctx = document.getElementById('scenarioChart').getContext('2d');
+        if (charts.scenario) charts.scenario.destroy();
+        
+        const base = forecast();
+        const optimistic = JSON.parse(JSON.stringify(state));
+        optimistic.invoices.forEach(i => i.amount *= 1.2);
+        const optResult = runForecast(optimistic);
+        
+        const pessimistic = JSON.parse(JSON.stringify(state));
+        pessimistic.invoices.forEach(i => { i.amount *= 0.8; i.payment_terms_days += 15; });
+        const pesResult = runForecast(pessimistic);
+
+        charts.scenario = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: base.map(d => d.month),
+                datasets: [
+                    { label: 'Base Case', data: base.map(d => d.balance), borderColor: '#2563eb', tension: 0.3 },
+                    { label: 'Optimistic (+20%)', data: optResult.map(d => d.balance), borderColor: '#16a34a', borderDash: [5,5], tension: 0.3 },
+                    { label: 'Pessimistic (-20%)', data: pesResult.map(d => d.balance), borderColor: '#dc2626', borderDash: [5,5], tension: 0.3 }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: false }
+        });
+    }
+
+    function runForecast(stateOverride) {
+        const orig = JSON.parse(JSON.stringify(state));
+        Object.assign(state, stateOverride);
+        const result = forecast();
+        Object.assign(state, orig);
+        return result;
+    }
+
+    // ============== SCENARIOS ==============
+    function renderScenarioList() {
+        const saved = JSON.parse(localStorage.getItem('cashflow_scenarios') || '{}');
+        document.getElementById('scenario-list').innerHTML = Object.keys(saved).map(name => `
+            <div class="scenario-chip" onclick="loadScenario('${name}')">${name}</div>
+        `).join('') || '<span style="color:var(--muted)">No saved scenarios</span>';
+    }
+
+    function saveCurrentScenario() {
+        const name = prompt('Scenario name:');
+        if (!name) return;
+        const saved = JSON.parse(localStorage.getItem('cashflow_scenarios') || '{}');
+        saved[name] = JSON.parse(JSON.stringify(state));
+        localStorage.setItem('cashflow_scenarios', JSON.stringify(saved));
+        renderScenarioList();
+        showToast('Scenario saved: ' + name, 'success');
+    }
+
+    function loadScenario(name) {
+        const saved = JSON.parse(localStorage.getItem('cashflow_scenarios') || '{}');
+        if (saved[name]) {
+            state = JSON.parse(JSON.stringify(saved[name]));
+            document.getElementById('initial_balance').value = state.config.initial_balance;
+            document.getElementById('dpo_days').value = state.config.dpo_days;
+            document.getElementById('dio_days').value = state.config.dio_days;
+            document.getElementById('tax_rate').value = state.config.tax_rate;
+            renderAll();
+            saveAndRecalculate();
+            showToast('Loaded: ' + name, 'success');
+        }
+    }
+
+    function loadSampleScenario() {
+        state.config = { initial_balance: 75000, dpo_days: 28, dio_days: 0, tax_rate: 25 };
+        state.fixed_costs = [
+            { name: 'Salaries', amount: 25000 }, { name: 'Rent', amount: 3500 },
+            { name: 'Tools & Software', amount: 1200 }, { name: 'Cloud Infrastructure', amount: 800 },
+            { name: 'Insurance', amount: 500 }, { name: 'Marketing', amount: 1000 }
+        ];
+        const todayDate = new Date().toISOString().split('T')[0];
+        state.invoices = [
+            { invoice_id: 'INV-001', client: 'Client A', amount: 25000, issue_date: daysAgo(15), payment_terms_days: 30, status: 'pending', received_amount: 0 },
+            { invoice_id: 'INV-002', client: 'Client B', amount: 12000, issue_date: daysAgo(10), payment_terms_days: 30, status: 'pending', received_amount: 0 },
+            { invoice_id: 'INV-003', client: 'Client C', amount: 8500, issue_date: daysAgo(75), payment_terms_days: 30, status: 'late', received_amount: 0 },
+            { invoice_id: 'INV-004', client: 'Client D', amount: 22000, issue_date: daysAgo(45), payment_terms_days: 30, status: 'received', received_amount: 22000 },
+            { invoice_id: 'INV-005', client: 'Client A', amount: 18000, issue_date: daysAgo(60), payment_terms_days: 30, status: 'received', received_amount: 18000 }
+        ];
+        state.expenses = [
+            { expense_id: 'EXP-001', description: 'Cloud Services', amount: 1450, date: daysAgo(3), expense_type: 'variable', category: 'Infrastructure', recurring: true },
+            { expense_id: 'EXP-002', description: 'Processing Costs', amount: 890, date: daysAgo(5), expense_type: 'variable', category: 'Infrastructure', recurring: true },
+            { expense_id: 'EXP-003', description: 'Freelancer', amount: 4500, date: daysAgo(7), expense_type: 'variable', category: 'Personnel', recurring: true }
+        ];
+        state.projects = [
+            {
+                project_id: 'PRJ-001', client: 'Client A', total_value: 85000, start_date: daysAgo(45),
+                estimated_end_date: daysFromNow(45), work_completion_pct: 35, payments_received: 0,
+                milestones: [
+                    { name: 'Phase 1', amount: 25000, date: daysFromNow(15), paid: false },
+                    { name: 'Phase 2', amount: 35000, date: daysFromNow(35), paid: false },
+                    { name: 'Phase 3', amount: 25000, date: daysFromNow(50), paid: false }
+                ]
+            }
+        ];
+        document.getElementById('initial_balance').value = state.config.initial_balance;
+        document.getElementById('dpo_days').value = state.config.dpo_days;
+        document.getElementById('dio_days').value = state.config.dio_days;
+        document.getElementById('tax_rate').value = state.config.tax_rate;
+        renderAll();
+        saveAndRecalculate();
+        showToast('Sample scenario loaded', 'success');
+    }
+
+    function daysAgo(n) { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().split('T')[0]; }
+    function daysFromNow(n) { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().split('T')[0]; }
+
+    // ============== IMPORT/EXPORT ==============
+    function exportJSON() {
+        const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'cashflow_scenario.json';
+        a.click();
+        showToast('Exported to JSON', 'success');
+    }
+
+    function importScenario(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                state = JSON.parse(e.target.result);
+                document.getElementById('initial_balance').value = state.config.initial_balance;
+                document.getElementById('dpo_days').value = state.config.dpo_days;
+                document.getElementById('dio_days').value = state.config.dio_days;
+                document.getElementById('tax_rate').value = state.config.tax_rate;
+                renderAll();
+                saveAndRecalculate();
+                showToast('Scenario imported', 'success');
+            } catch (err) { showToast('Invalid JSON file', 'error'); }
+        };
+        reader.readAsText(file);
+    }
+
+    // ============== UTILS ==============
+    function renderAll() {
+        renderFixedCosts();
+        renderInvoices();
+        renderExpenses();
+        renderProjects();
+        renderScenarioList();
+    }
+
+    function showToast(msg, type) {
+        const toast = document.createElement('div');
+        toast.className = 'toast ' + type;
+        toast.textContent = msg;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+    }
+
+    // ============== START ==============
+    init();
+    </script>
+</body>
+</html>

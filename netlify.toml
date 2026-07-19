@@ -1,0 +1,16 @@
+# Deploy: arrastra esta carpeta a https://app.netlify.com/drop
+# O ejecuta: netlify deploy --prod --dir=.
+
+[build]
+  publish = "."
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+
+[[headers]]
+  for = "*.html"
+  [headers.values]
+    Cache-Control = "no-cache"
