@@ -264,7 +264,7 @@ def test_collection_probability():
 
 
 def test_tax_estimation():
-    """Quarterly tax payments in months 3,6,9,12"""
+    """Quarterly tax payments in the 3rd month of each forecast quarter"""
     print("\n[Tax Estimation]")
     results = TestResults()
     
@@ -272,9 +272,8 @@ def test_tax_estimation():
     m.set_monthly_fixed_costs({'cost': 10000})
     m.set_tax_rate(0.25)
     
-    # Add income that falls in month 2 (September = quarter end)
-    # Invoice issued today, due in 60 days -> expected payment ~month 2
-    m.add_invoice(Invoice("I1", "C1", 50000, days_ago(5), days_from_now(65), 60,
+    # Income in the first forecast month
+    m.add_invoice(Invoice("I1", "C1", 50000, days_ago(5), days_from_now(5), 5,
                           PaymentStatus.PENDING))
     
     forecast = m.forecast_cash_flow(months=12)
@@ -282,13 +281,28 @@ def test_tax_estimation():
     # Check which months have tax > 0
     tax_months = [i for i, row in forecast.iterrows() if row['tax_expenses'] > 0]
     
-    # Tax should appear in quarter-end months
+    # Tax should appear in quarter-end months (forecast-relative: indices 2, 5, 8, 11)
     results.check("Tax calculated in some months", len(tax_months) > 0, f"got months {tax_months}")
     
     # Verify quarterly pattern: tax should appear every 3 months
     if len(tax_months) >= 2:
         gaps = [tax_months[i+1] - tax_months[i] for i in range(len(tax_months)-1)]
         results.check("Tax is quarterly (3-month gaps)", all(g == 3 for g in gaps), f"gaps={gaps}")
+    
+    # Verify tax equals tax_rate * quarterly profit (accumulated, not single-month)
+    positive_quarters = [i for i, row in forecast.iterrows() if row['tax_expenses'] > 0]
+    if positive_quarters:
+        idx = positive_quarters[0]
+        q_start = idx - 2
+        q_profit = sum(
+            (forecast.iloc[j]['projected_income']
+             - forecast.iloc[j]['fixed_expenses']
+             - forecast.iloc[j]['variable_expenses']) for j in range(q_start, idx + 1)
+        )
+        expected = max(q_profit, 0) * 0.25
+        results.check("Tax = rate x quarterly accumulated profit",
+                      abs(forecast.iloc[idx]['tax_expenses'] - expected) < 0.01,
+                      f"got {forecast.iloc[idx]['tax_expenses']}, expected {expected}")
     
     return results
 
@@ -383,6 +397,87 @@ def test_edge_cases():
     return results
 
 
+def test_sales_tax():
+    """Sales tax (VAT/IVA) liability and available cash"""
+    print("\n[Sales Tax (IVA/VAT)]")
+    results = TestResults()
+    
+    m = CashFlowModel(initial_balance=50000)
+    m.add_invoice(Invoice("I1", "C1", 10000, days_ago(10), days_from_now(20), 30,
+                          PaymentStatus.RECEIVED, days_ago(8), 10000))
+    
+    # Default sales tax = 0 -> no liability
+    results.check("No sales tax => liability 0", m.get_sales_tax_liability() == 0)
+    results.check("No sales tax => available = balance",
+                  abs(m.get_available_cash() - m.get_current_balance()) < 0.001)
+    
+    m.set_sales_tax_rate(0.21)  # 21% IVA
+    # Received 10000 * 0.21 = 2100 owed
+    results.check("Liability on received", abs(m.get_sales_tax_liability() - 2100) < 0.01,
+                  f"got {m.get_sales_tax_liability()}")
+    results.check("Available = balance - liability",
+                  abs(m.get_available_cash() - (m.get_current_balance() - 2100)) < 0.01)
+    
+    # Pending invoice also accrues liability (conservative)
+    m.add_invoice(Invoice("I2", "C2", 20000, days_ago(5), days_from_now(25), 30,
+                          PaymentStatus.PENDING))
+    results.check("Liability includes outstanding",
+                  abs(m.get_sales_tax_liability() - (10000 + 20000) * 0.21) < 0.01,
+                  f"got {m.get_sales_tax_liability()}")
+    
+    # Validation
+    try:
+        m.set_sales_tax_rate(1.5)
+        results.check("Sales tax rate >1 rejected", False)
+    except ValueError:
+        results.check("Sales tax rate >1 rejected", True)
+    
+    return results
+
+
+def test_monte_carlo():
+    """Monte Carlo simulation determinism and output structure"""
+    print("\n[Monte Carlo]")
+    results = TestResults()
+    
+    m = CashFlowModel(initial_balance=100000)
+    m.set_monthly_fixed_costs({'cost': 20000})
+    m.add_invoice(Invoice("I1", "C1", 50000, days_ago(5), days_from_now(25), 30,
+                          PaymentStatus.PENDING))
+    
+    # Deterministic with seed
+    a = m.monte_carlo(n_simulations=200, months=12, seed=7,
+                      income_volatility=0.1, bad_debt_probability=0.05)
+    b = m.monte_carlo(n_simulations=200, months=12, seed=7,
+                      income_volatility=0.1, bad_debt_probability=0.05)
+    results.check("Same seed => same result",
+                  a['survival_probability'] == b['survival_probability']
+                  and (a['percentiles'].values == b['percentiles'].values).all())
+    
+    # Structure
+    results.check("Percentiles has 12 rows", len(a['percentiles']) == 12)
+    results.check("Has p10/p50/p90 columns",
+                  all(c in a['percentiles'].columns for c in ['p10', 'p50', 'p90']))
+    results.check("Survival prob in [0,1]", 0 <= a['survival_probability'] <= 1)
+    results.check("n_simulations reported", a['n_simulations'] == 200)
+    results.check("Final balance has p10/p50/p90",
+                  all(k in a['final_balance'] for k in ['p10', 'p50', 'p90']))
+    
+    # P10 <= P50 <= P90 per month
+    pct = a['percentiles']
+    monotone = ((pct['p10'] <= pct['p50']) & (pct['p50'] <= pct['p90'])).all()
+    results.check("P10 <= P50 <= P90", monotone)
+    
+    # Validation
+    try:
+        m.monte_carlo(n_simulations=0)
+        results.check("n_simulations=0 rejected", False)
+    except ValueError:
+        results.check("n_simulations=0 rejected", True)
+    
+    return results
+
+
 def test_full_scenario():
     """End-to-end scenario validation"""
     print("\n[Full Scenario - E2E]")
@@ -444,6 +539,8 @@ def main():
     all_results.append(test_collection_probability())
     all_results.append(test_tax_estimation())
     all_results.append(test_milestone_deduplication())
+    all_results.append(test_sales_tax())
+    all_results.append(test_monte_carlo())
     all_results.append(test_edge_cases())
     all_results.append(test_full_scenario())
     

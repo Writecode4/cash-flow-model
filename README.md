@@ -6,6 +6,8 @@ Advanced cash flow forecasting and scenario planning tool designed specifically 
 
 - **Cash Conversion Cycle Analysis** - Track how quickly you convert work into cash
 - **Scenario Planning** - Test what-if scenarios (new clients, delays, hires)
+- **Monte Carlo Simulation** - Probabilistic forecast with P10/P50/P90 ranges, survival probability and collection-risk (payment delay + bad debt) distributions
+- **Sales Tax (VAT/IVA) Awareness** - Configurable sales tax rate; liabilities are reserved from the balance so Runway uses *available* cash, not the full bank balance
 - **Liquidity Stress Testing** - See how your business survives under different conditions
 - **Client Payment Behavior** - Identify slow payers and patterns
 - **Project-Level Tracking** - Monitor cash flow per project/milestone
@@ -63,6 +65,10 @@ model.add_project(Project(
 # Run analysis
 dashboard = model.generate_dashboard_data()
 print(f"Runway: {dashboard['runway_months']:.1f} months")
+print(f"Available cash: ${dashboard['available_cash']:,.2f}")  # balance - sales tax liability
+
+# Configure sales tax (e.g. 21% IVA)
+model.set_sales_tax_rate(0.21)
 
 # Scenario analysis
 scenarios = {
@@ -71,6 +77,15 @@ scenarios = {
     'Downturn': {'income_multiplier': 0.7}
 }
 results = model.scenario_analysis(scenarios)
+
+# Monte Carlo simulation (probabilistic, P10/P50/P90)
+mc = model.monte_carlo(
+    n_simulations=1000, months=12, seed=42,
+    income_volatility=0.15, expense_volatility=0.10,
+    payment_delay_mean_days=10, bad_debt_probability=0.05
+)
+print(f"Survival probability: {mc['survival_probability']*100:.1f}%")
+print(mc['percentiles'])
 
 # Export to Excel
 model.export_to_excel('report.xlsx')
@@ -106,6 +121,9 @@ from dashboard import CashFlowDashboard
 
 dashboard = CashFlowDashboard(model)
 dashboard.create_full_dashboard(save_path='dashboard.png')
+
+# Monte Carlo band chart (P10-P90 with survival stats)
+dashboard.plot_monte_carlo(save_path='monte_carlo.png')
 ```
 
 ## File Structure
@@ -127,3 +145,25 @@ cash-flow-model/
 3. **Growth Phase** - 10+ employees, scaling operations
 
 Each scenario includes realistic invoices, expenses, and project data.
+
+## Limitations (read before using for real decisions)
+
+This is a **cash-basis forecasting sandbox**, not an audited financial model. It is
+useful as a short-term (2-3 month) operational simulator and as a portfolio / MVP,
+but it does **not** replace professional FP&A. Known gaps:
+
+- **No accrual accounting**: revenue recognition, accrued liabilities (vacation,
+  bonuses, deferred tax) and cost-of-delivery margins per project are not modeled.
+- **Sales tax is reserved but not a full tax engine**: VAT/IVA is deducted from
+  available cash, but withholding taxes (e.g. IRPF), corporate tax timing and
+  e-invoicing (Verifactu, etc.) must be validated against your local rules.
+- **Fixed scenario multipliers are sensitivity knobs, not business scenarios**.
+  Use `monte_carlo()` for probabilistic ranges (P10/P50/P90).
+- **No financing** (debt/equity, credit lines), no CAPEX/depreciation, no owner
+  distributions.
+- Data is entered programmatically (Python dicts / JSON / CSV / Excel); there are
+  no API connectors (Stripe, bank/PSD2, accounting tools) yet.
+
+Use the *deterministic* output as an early-warning signal, and the *Monte Carlo*
+ranges to size risk — but for board-level or investor decisions, run a proper
+three-statement model with a qualified controller.

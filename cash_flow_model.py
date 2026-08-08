@@ -208,7 +208,8 @@ class CashFlowModel:
         self.monthly_fixed_costs: Dict[str, float] = {}
         self.dpo_days: int = 30  # Configurable Days Payable Outstanding
         self.dio_days: int = 0   # Configurable Days Inventory Outstanding
-        self.tax_rate: float = 0.25  # Configurable tax rate
+        self.tax_rate: float = 0.25  # Configurable corporate/income tax rate
+        self.sales_tax_rate: float = 0.0  # Configurable sales tax (VAT/IVA), 0 = none
         
     def add_invoice(self, invoice: Invoice):
         """Add an invoice to the model."""
@@ -230,10 +231,16 @@ class CashFlowModel:
         self.monthly_fixed_costs = costs
     
     def set_tax_rate(self, rate: float):
-        """Set effective tax rate (0.0 to 1.0)."""
+        """Set effective corporate/income tax rate (0.0 to 1.0)."""
         if rate < 0 or rate > 1:
             raise ValueError(f"Tax rate must be 0-1, got {rate}")
         self.tax_rate = rate
+    
+    def set_sales_tax_rate(self, rate: float):
+        """Set sales tax rate (VAT/IVA) applied to invoiced amounts (0.0 to 1.0)."""
+        if rate < 0 or rate > 1:
+            raise ValueError(f"Sales tax rate must be 0-1, got {rate}")
+        self.sales_tax_rate = rate
     
     def set_dpo_days(self, days: int):
         """Set Days Payable Outstanding based on actual payment behavior."""
@@ -357,7 +364,10 @@ class CashFlowModel:
         Calculate cash runway in months - AUDIT COMPLIANT.
         
         Accounts for BOTH burn rate AND expected incoming payments.
-        Runway = Current Balance / Net Monthly Burn (if positive)
+        Runway = Available Cash / Net Monthly Burn (if positive)
+        
+        Available cash excludes sales tax liability (VAT/IVA) — money in the
+        bank that is owed to the tax authority, not discretionary funds.
         
         If net burn <= 0, runway is infinite (cash flow positive).
         """
@@ -365,13 +375,13 @@ class CashFlowModel:
         
         if burn_rate <= 0:
             # Company is cash flow positive or break-even
-            current_balance = self.get_current_balance()
-            if current_balance > 0:
+            available_cash = self.get_available_cash()
+            if available_cash > 0:
                 return float('inf')
             return 0
         
-        current_balance = self.get_current_balance()
-        return current_balance / burn_rate
+        available_cash = self.get_available_cash()
+        return available_cash / burn_rate
     
     def get_current_balance(self) -> float:
         """Calculate current cash balance."""
@@ -381,6 +391,35 @@ class CashFlowModel:
         )
         spent = sum(exp.amount for exp in self.expenses)
         return self.initial_balance + received - spent
+    
+    def get_sales_tax_liability(self) -> float:
+        """
+        Sales tax (VAT/IVA) collected from clients but owed to the tax authority.
+        
+        Includes tax on payments already received AND on outstanding receivables
+        (conservative: assumes the tax will be due on collection).
+        """
+        if self.sales_tax_rate <= 0:
+            return 0.0
+        
+        collected = sum(
+            inv.received_amount for inv in self.invoices 
+            if inv.status == PaymentStatus.RECEIVED
+        )
+        outstanding = sum(
+            inv.amount for inv in self.invoices 
+            if inv.status in (PaymentStatus.PENDING, PaymentStatus.LATE)
+        )
+        return (collected + outstanding) * self.sales_tax_rate
+    
+    def get_available_cash(self) -> float:
+        """
+        Cash actually available to the business after reserving sales tax.
+        
+        The bank balance includes money that is not yours (VAT/IVA collected
+        on behalf of the tax authority). This is the real discretionary cash.
+        """
+        return self.get_current_balance() - self.get_sales_tax_liability()
     
     def get_accounts_receivable(self) -> Dict[str, float]:
         """Get breakdown of accounts receivable by aging."""
@@ -447,6 +486,10 @@ class CashFlowModel:
         # Pre-calculate milestone linkage to avoid double counting
         invoiced_milestone_ids = self._get_invoiced_milestone_ids()
         
+        # Quarterly accumulation (forecast-relative, independent of start date)
+        quarter_gross_profit = 0.0
+        quarter_sales_tax = 0.0
+        
         for month_offset in range(months):
             # Calculate month boundaries using actual calendar
             forecast_date = self._add_months(today, month_offset)
@@ -481,10 +524,22 @@ class CashFlowModel:
             fixed_expenses = sum(self.monthly_fixed_costs.values())
             variable_expenses = self._calculate_monthly_variable_expenses()
             
-            # Tax obligations (annual estimation, quarterly payments)
-            tax_expenses = self._estimate_quarterly_tax(projected_income, fixed_expenses, variable_expenses, month_start)
+            # Sales tax (VAT/IVA) collected on income, settled quarterly
+            quarter_sales_tax += projected_income * self.sales_tax_rate
             
-            total_expenses = fixed_expenses + variable_expenses + tax_expenses
+            # Income/corporate tax on quarterly accumulated profit
+            quarter_gross_profit += projected_income - fixed_expenses - variable_expenses
+            
+            if (month_offset % 3) == 2:
+                tax_expenses = max(quarter_gross_profit, 0.0) * self.tax_rate
+                sales_tax_expenses = quarter_sales_tax
+                quarter_gross_profit = 0.0
+                quarter_sales_tax = 0.0
+            else:
+                tax_expenses = 0.0
+                sales_tax_expenses = 0.0
+            
+            total_expenses = fixed_expenses + variable_expenses + tax_expenses + sales_tax_expenses
             net_cash_flow = projected_income - total_expenses
             current_balance += net_cash_flow
             
@@ -495,6 +550,7 @@ class CashFlowModel:
                 'fixed_expenses': fixed_expenses,
                 'variable_expenses': variable_expenses,
                 'tax_expenses': tax_expenses,
+                'sales_tax_expenses': sales_tax_expenses,
                 'total_expenses': total_expenses,
                 'net_cash_flow': net_cash_flow,
                 'cumulative_balance': current_balance
@@ -555,29 +611,6 @@ class CashFlowModel:
         
         # Each recurring expense is a separate monthly cost - sum them
         return sum(recurring_variable)
-    
-    def _estimate_quarterly_tax(self, income: float, fixed: float, variable: float, month: datetime) -> float:
-        """
-        Estimate quarterly tax payment.
-        
-        Taxes are typically paid quarterly based on projected annual profit.
-        This simplification estimates monthly tax accrual with quarterly payment.
-        """
-        gross_profit_monthly = income - fixed - variable
-        
-        if gross_profit_monthly <= 0:
-            return 0
-        
-        # Monthly tax accrual
-        monthly_tax = gross_profit_monthly * self.tax_rate
-        
-        # Only pay in months that are end of quarter (3, 6, 9, 12)
-        if month.month in [3, 6, 9, 12]:
-            # Quarterly payment = 3 months of accrued tax
-            return monthly_tax * 3
-        
-        # Other months: just accrue (no cash outflow)
-        return 0
     
     def _add_months(self, date: datetime, months: int) -> datetime:
         """Add months to a date safely."""
@@ -696,6 +729,92 @@ class CashFlowModel:
         
         return pd.concat(results, ignore_index=True)
     
+    def monte_carlo(self, n_simulations: int = 1000, months: int = 12, seed: Optional[int] = None,
+                    income_volatility: float = 0.15, expense_volatility: float = 0.10,
+                    payment_delay_mean_days: float = 0.0, bad_debt_probability: float = 0.0) -> Dict:
+        """
+        Monte Carlo simulation of the cash flow forecast.
+        
+        Instead of fixed scenario multipliers, each run draws from probability
+        distributions:
+        - income_volatility: lognormal shock on projected invoice income
+        - expense_volatility: lognormal shock on recurring expenses
+        - payment_delay_mean_days: exponential delay on each pending invoice's
+          expected payment date (mean of the distribution)
+        - bad_debt_probability: chance each pending invoice never gets collected
+        
+        Returns a dict with:
+        - 'percentiles': DataFrame (month, p10, p50, p90) of cumulative balance
+        - 'survival_probability': fraction of runs that never go cash negative
+        - 'min_balance_p50': median of the minimum balance across runs
+        - 'final_balance': (p10, p50, p90) of the balance at month end
+        - 'n_simulations': number of runs performed
+        """
+        if n_simulations < 1:
+            raise ValueError(f"n_simulations must be >= 1, got {n_simulations}")
+        if bad_debt_probability < 0 or bad_debt_probability > 1:
+            raise ValueError(f"bad_debt_probability must be 0-1, got {bad_debt_probability}")
+        if income_volatility < 0 or expense_volatility < 0 or payment_delay_mean_days < 0:
+            raise ValueError("Volatility and delay parameters cannot be negative")
+        
+        rng = np.random.default_rng(seed)
+        final_balances = np.zeros(n_simulations)
+        min_balances = np.zeros(n_simulations)
+        trajectories = np.zeros((n_simulations, months))
+        
+        for i in range(n_simulations):
+            sim = copy.deepcopy(self)
+            
+            # Per-invoice payment risk: bad debt or collection delay
+            for inv in sim.invoices:
+                if inv.status in (PaymentStatus.PENDING, PaymentStatus.LATE):
+                    if rng.random() < bad_debt_probability:
+                        inv.status = PaymentStatus.DEFAULTED
+                    elif payment_delay_mean_days > 0:
+                        delay = int(rng.exponential(payment_delay_mean_days))
+                        inv.due_date += timedelta(days=delay)
+                        inv.payment_terms_days += delay
+            
+            # Global income / expense shocks for this run
+            income_shock = rng.lognormal(0.0, income_volatility)
+            expense_shock = rng.lognormal(0.0, expense_volatility)
+            
+            for inv in sim.invoices:
+                if inv.status in (PaymentStatus.PENDING, PaymentStatus.LATE):
+                    inv.amount *= income_shock
+            for proj in sim.projects:
+                proj.total_value *= income_shock
+            for exp in sim.expenses:
+                exp.amount *= expense_shock
+            sim.monthly_fixed_costs = {
+                k: v * expense_shock for k, v in sim.monthly_fixed_costs.items()
+            }
+            
+            forecast = sim.forecast_cash_flow(months=months)
+            balances = forecast['cumulative_balance'].values
+            trajectories[i] = balances
+            final_balances[i] = balances[-1]
+            min_balances[i] = balances.min()
+        
+        percentiles = pd.DataFrame({
+            'month': [f"{self._add_months(datetime.now(), m).strftime('%Y-%m')}" for m in range(months)],
+            'p10': np.percentile(trajectories, 10, axis=0),
+            'p50': np.percentile(trajectories, 50, axis=0),
+            'p90': np.percentile(trajectories, 90, axis=0)
+        })
+        
+        return {
+            'percentiles': percentiles,
+            'survival_probability': float((min_balances > 0).mean()),
+            'min_balance_p50': float(np.median(min_balances)),
+            'final_balance': {
+                'p10': float(np.percentile(final_balances, 10)),
+                'p50': float(np.percentile(final_balances, 50)),
+                'p90': float(np.percentile(final_balances, 90))
+            },
+            'n_simulations': n_simulations
+        }
+    
     def client_payment_analysis(self) -> pd.DataFrame:
         """Analyze payment behavior by client."""
         client_stats = {}
@@ -741,6 +860,9 @@ class CashFlowModel:
         
         return {
             'current_balance': self.get_current_balance(),
+            'available_cash': self.get_available_cash(),
+            'sales_tax_liability': self.get_sales_tax_liability(),
+            'sales_tax_rate': self.sales_tax_rate,
             'dso': self.calculate_dso(),
             'dso_raw': self.calculate_dso_raw(),
             'cash_conversion_cycle': self.calculate_cash_conversion_cycle(),
@@ -830,6 +952,8 @@ if __name__ == '__main__':
     dashboard = model.generate_dashboard_data()
     
     print(f"\nCurrent Balance: ${dashboard['current_balance']:,.2f}")
+    print(f"Available Cash: ${dashboard['available_cash']:,.2f}")
+    print(f"Sales Tax Liability: ${dashboard['sales_tax_liability']:,.2f}")
     print(f"DSO (weighted): {dashboard['dso']:.1f} days")
     print(f"DSO (raw): {dashboard['dso_raw']:.1f} days")
     print(f"Cash Conversion Cycle: {dashboard['cash_conversion_cycle']:.1f} days")
@@ -858,3 +982,19 @@ if __name__ == '__main__':
     
     results = model.scenario_analysis(scenarios)
     print(results.to_string(index=False))
+    
+    print("\n" + "=" * 60)
+    print("MONTE CARLO SIMULATION (P10/P50/P90)")
+    print("=" * 60)
+    
+    mc = model.monte_carlo(n_simulations=1000, months=12, seed=42,
+                           income_volatility=0.15, expense_volatility=0.10,
+                           payment_delay_mean_days=10, bad_debt_probability=0.05)
+    
+    print(f"Survival probability: {mc['survival_probability']*100:.1f}%")
+    print(f"Median minimum balance: ${mc['min_balance_p50']:,.2f}")
+    print(f"Final balance P10/P50/P90: "
+          f"${mc['final_balance']['p10']:,.0f} / "
+          f"${mc['final_balance']['p50']:,.0f} / "
+          f"${mc['final_balance']['p90']:,.0f}")
+    print(mc['percentiles'].head(12).to_string(index=False))

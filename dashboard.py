@@ -339,7 +339,7 @@ class CashFlowDashboard:
         
         dso = self.model.calculate_dso()
         dio = 0  # Consulting
-        dpo = self.model.calculate_dpo()
+        dpo = self.model.dpo_days
         
         metrics = {
             'Days Sales Outstanding\n(Collect receivables)': dso,
@@ -366,6 +366,50 @@ class CashFlowDashboard:
                transform=ax.transAxes, ha='right', va='top',
                fontsize=12, fontweight='bold',
                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        if save_path:
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        
+        plt.tight_layout()
+        plt.show()
+    
+    def plot_monte_carlo(self, n_simulations: int = 1000, months: int = 12, seed: int = 42,
+                         income_volatility: float = 0.15, expense_volatility: float = 0.10,
+                         payment_delay_mean_days: float = 0.0, bad_debt_probability: float = 0.0,
+                         save_path: str = None):
+        """Plot Monte Carlo forecast with P10/P50/P90 bands and survival stats."""
+        result = self.model.monte_carlo(
+            n_simulations=n_simulations, months=months, seed=seed,
+            income_volatility=income_volatility, expense_volatility=expense_volatility,
+            payment_delay_mean_days=payment_delay_mean_days,
+            bad_debt_probability=bad_debt_probability
+        )
+        
+        pct = result['percentiles']
+        months_range = range(len(pct))
+        p10 = pct['p10'].values
+        p50 = pct['p50'].values
+        p90 = pct['p90'].values
+        
+        fig, ax = plt.subplots(figsize=(14, 6))
+        
+        ax.fill_between(months_range, p10, p90, alpha=0.25, color=self.colors['primary'],
+                        label='P10 - P90 range')
+        ax.plot(months_range, p50, color=self.colors['primary'], linewidth=2,
+                label='P50 (median)')
+        ax.axhline(y=0, color=self.colors['danger'], linestyle='--', alpha=0.6, label='Zero cash')
+        
+        ax.set_title(f"Monte Carlo Cash Forecast ({result['n_simulations']} runs)\n"
+                     f"Survival probability: {result['survival_probability']*100:.1f}%  |  "
+                     f"Median min balance: ${result['min_balance_p50']:,.0f}",
+                     fontsize=12, fontweight='bold')
+        ax.set_xlabel('Month')
+        ax.set_ylabel('Cumulative Balance ($)')
+        ax.set_xticks(months_range[::2])
+        ax.set_xticklabels([pct['month'].iloc[i] for i in range(0, len(pct), 2)], rotation=45)
+        ax.legend(loc='best')
+        ax.grid(alpha=0.3)
+        ax.set_facecolor(self.colors['light'])
         
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')

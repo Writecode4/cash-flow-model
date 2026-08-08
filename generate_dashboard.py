@@ -877,7 +877,7 @@ def generate_insights(dashboard_data, scenario_results):
 if __name__ == '__main__':
     html = generate_html_dashboard()
     
-    output_path = 'C:/Users/Carlos/Desktop/cash-flow-model/dashboard.html'
+    output_path = 'dashboard.html'
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html)
     
