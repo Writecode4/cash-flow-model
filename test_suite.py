@@ -12,6 +12,9 @@ from cash_flow_model import (
     CashFlowModel, Invoice, Expense, Project,
     PaymentStatus, ExpenseType
 )
+from connectors.stripe import StripeConnector, ConnectorError
+from connectors.quickbooks import QuickBooksConnector
+from scenario_loader import ScenarioLoader
 
 
 class TestResults:
@@ -478,6 +481,232 @@ def test_monte_carlo():
     return results
 
 
+def test_stripe_connector():
+    """Stripe connector: parsing and model building"""
+    print("\n[Stripe Connector]")
+    results = TestResults()
+    today = datetime.now()
+    created_ts = int((today - timedelta(days=30)).timestamp())
+    due_ts = int((today + timedelta(days=30)).timestamp())
+    paid_ts = int((today - timedelta(days=10)).timestamp())
+
+    # --- parse_invoice: paid invoice linked to a charge ---
+    inv = StripeConnector.parse_invoice(
+        {'id': 'in_1', 'customer_name': 'Acme', 'status': 'paid',
+         'created': created_ts, 'due_date': due_ts, 'total': 2500000},  # 25000.00
+        payments=[{'invoice': 'in_1', 'created': paid_ts, 'amount_captured': 2500000}]
+    )
+    results.check("Paid invoice mapped to RECEIVED", inv.status == PaymentStatus.RECEIVED)
+    results.check("Minor->major conversion (cents / 100)", abs(inv.amount - 25000) < 0.01, f"got {inv.amount}")
+    results.check("Received amount from charge", abs(inv.received_amount - 25000) < 0.01)
+    results.check("Received date from charge", inv.received_date is not None)
+    results.check("Payment terms derived", inv.payment_terms_days == 60)
+
+    # --- open invoice -> PENDING ---
+    inv = StripeConnector.parse_invoice(
+        {'id': 'in_2', 'customer_email': 'b@x.com', 'status': 'open',
+         'created': created_ts, 'amount_due': 100000}
+    )
+    results.check("Open invoice mapped to PENDING", inv.status == PaymentStatus.PENDING)
+    results.check("Open invoice no received amount", inv.received_amount == 0)
+
+    # --- past_due -> LATE ---
+    inv = StripeConnector.parse_invoice(
+        {'id': 'in_3', 'status': 'past_due', 'created': created_ts, 'total': 500000}
+    )
+    results.check("past_due mapped to LATE", inv.status == PaymentStatus.LATE)
+
+    # --- uncollectible -> DEFAULTED ---
+    inv = StripeConnector.parse_invoice(
+        {'id': 'in_4', 'status': 'uncollectible', 'created': created_ts, 'total': 500000}
+    )
+    results.check("uncollectible mapped to DEFAULTED", inv.status == PaymentStatus.DEFAULTED)
+    results.check("Defaulted collection prob 0", inv.collection_probability == 0.0)
+
+    # --- draft/void skipped ---
+    inv = StripeConnector.parse_invoice({'id': 'in_5', 'status': 'draft', 'total': 100})
+    results.check("Draft invoice skipped", inv is None)
+
+    # --- missing id -> ConnectorError ---
+    try:
+        StripeConnector.parse_invoice({'status': 'open', 'total': 100})
+        results.check("Missing id raises", False)
+    except ConnectorError:
+        results.check("Missing id raises", True)
+
+    # --- to_model builds a complete model ---
+    payload = {
+        'invoices': [
+            {'id': 'in_1', 'customer_name': 'Acme', 'status': 'paid',
+             'created': created_ts, 'due_date': due_ts, 'total': 2500000},
+            {'id': 'in_2', 'customer_email': 'b@x.com', 'status': 'open',
+             'created': created_ts, 'amount_due': 100000},
+            {'id': 'in_3', 'status': 'draft', 'total': 999},
+        ],
+        'payments': [],
+        'expenses': [
+            {'id': 'py_1', 'description': 'Hosting', 'amount': 50000,
+             'created': created_ts, 'category': 'Infra', 'expense_type': 'variable', 'recurring': True}
+        ],
+    }
+    model = StripeConnector().to_model(
+        payload,
+        config={'initial_balance': 10000, 'sales_tax_rate': 0.21,
+                'monthly_fixed_costs': {'rent': 2000}}
+    )
+    results.check("Model has 2 invoices (draft skipped)", len(model.invoices) == 2)
+    results.check("Model has 1 expense", len(model.expenses) == 1)
+    results.check("Sales tax rate applied", model.sales_tax_rate == 0.21)
+    results.check("Fixed costs applied", model.monthly_fixed_costs.get('rent') == 2000)
+    results.check("Balance reflects received",
+                  abs(model.get_current_balance() - (10000 + 25000 - 500)) < 0.01,
+                  f"got {model.get_current_balance()}")
+    results.check("Forecast runs on connector model", len(model.forecast_cash_flow(months=6)) == 6)
+
+    # --- fetch requires key/SDK ---
+    try:
+        StripeConnector().fetch()
+        results.check("fetch without key raises", False)
+    except ConnectorError:
+        results.check("fetch without key raises", True)
+
+    return results
+
+
+def test_quickbooks_connector():
+    """QuickBooks connector: parsing and model building"""
+    print("\n[QuickBooks Connector]")
+    results = TestResults()
+    today = datetime.now()
+    iso_today = today.strftime('%Y-%m-%d')
+    iso_30 = (today - timedelta(days=30)).strftime('%Y-%m-%d')
+    iso_60 = (today - timedelta(days=60)).strftime('%Y-%m-%d')
+    iso_30ahead = (today + timedelta(days=30)).strftime('%Y-%m-%d')
+
+    # --- paid invoice (Balance 0) linked to a payment ---
+    inv = QuickBooksConnector.parse_invoice(
+        {'Id': '123', 'CustomerRef': {'name': 'Acme'}, 'TotalAmt': 40000.0,
+         'Balance': 0.0, 'TxnDate': iso_60, 'DueDate': iso_30},
+        payments=[{'TxnDate': iso_30, 'TotalAmt': 40000.0,
+                   'LinkedTxn': [{'TxnId': '123'}]}]
+    )
+    results.check("Zero balance => RECEIVED", inv.status == PaymentStatus.RECEIVED)
+    results.check("Received amount from linked payment", abs(inv.received_amount - 40000) < 0.01)
+    results.check("Client name from CustomerRef", inv.client == 'Acme')
+
+    # --- overdue (Balance > 0, DueDate past) -> LATE ---
+    inv = QuickBooksConnector.parse_invoice(
+        {'Id': '124', 'CustomerRef': {'name': 'Beta'}, 'TotalAmt': 10000.0,
+         'Balance': 10000.0, 'TxnDate': iso_60, 'DueDate': iso_30}
+    )
+    results.check("Overdue mapped to LATE", inv.status == PaymentStatus.LATE)
+
+    # --- pending (due in future) -> PENDING ---
+    inv = QuickBooksConnector.parse_invoice(
+        {'Id': '125', 'CustomerRef': {'name': 'Gamma'}, 'TotalAmt': 5000.0,
+         'Balance': 5000.0, 'TxnDate': iso_today, 'DueDate': iso_30ahead}
+    )
+    results.check("Future due => PENDING", inv.status == PaymentStatus.PENDING)
+
+    # --- explicit status defaulted ---
+    inv = QuickBooksConnector.parse_invoice(
+        {'Id': '126', 'CustomerRef': {'name': 'Delta'}, 'TotalAmt': 3000.0,
+         'Balance': 3000.0, 'TxnDate': iso_60, 'DueDate': iso_30, 'status': 'defaulted'}
+    )
+    results.check("Explicit defaulted status", inv.status == PaymentStatus.DEFAULTED)
+
+    # --- explicit void -> skipped ---
+    inv = QuickBooksConnector.parse_invoice(
+        {'Id': '127', 'TotalAmt': 1000.0, 'Balance': 1000.0, 'status': 'void'}
+    )
+    results.check("Void invoice skipped", inv is None)
+
+    # --- missing Id -> ConnectorError ---
+    try:
+        QuickBooksConnector.parse_invoice({'TotalAmt': 1000.0})
+        results.check("Missing Id raises", False)
+    except ConnectorError:
+        results.check("Missing Id raises", True)
+
+    # --- to_model builds a complete model ---
+    payload = {
+        'invoices': [
+            {'Id': '123', 'CustomerRef': {'name': 'Acme'}, 'TotalAmt': 40000.0,
+             'Balance': 0.0, 'TxnDate': iso_60, 'DueDate': iso_30},
+            {'Id': '124', 'CustomerRef': {'name': 'Beta'}, 'TotalAmt': 10000.0,
+             'Balance': 10000.0, 'TxnDate': iso_60, 'DueDate': iso_30},
+        ],
+        'payments': [
+            {'TxnDate': iso_30, 'TotalAmt': 40000.0, 'LinkedTxn': [{'TxnId': '123'}]}
+        ],
+        'expenses': [
+            {'Id': '9', 'VendorRef': {'name': 'AWS'}, 'TotalAmt': 800.0,
+             'TxnDate': iso_30, 'expense_type': 'variable', 'recurring': True}
+        ],
+    }
+    model = QuickBooksConnector().to_model(payload, config={'initial_balance': 5000})
+    results.check("Model has 2 invoices", len(model.invoices) == 2)
+    results.check("Model has 1 expense", len(model.expenses) == 1)
+    received = sum(i.received_amount for i in model.invoices)
+    results.check("Balance reflects payment",
+                  abs(model.get_current_balance() - (5000 + received - 800)) < 0.01,
+                  f"got {model.get_current_balance()}")
+
+    # --- fetch requires token/realm ---
+    try:
+        QuickBooksConnector().fetch()
+        results.check("fetch without token raises", False)
+    except ConnectorError:
+        results.check("fetch without token raises", True)
+
+    return results
+
+
+def test_load_from_connector():
+    """ScenarioLoader.load_from_connector orchestration"""
+    print("\n[Load From Connector]")
+    results = TestResults()
+    today = datetime.now()
+    created_ts = int((today - timedelta(days=20)).timestamp())
+
+    class FakeConnector:
+        def __init__(self):
+            self.fetch_called = False
+
+        def fetch(self):
+            self.fetch_called = True
+            return {
+                'invoices': [{'id': 'in_1', 'status': 'open',
+                              'created': created_ts, 'total': 150000}],
+                'payments': [],
+                'expenses': [],
+            }
+
+        def to_model(self, data, config=None):
+            return StripeConnector().to_model(data, config=config)
+
+    # Data provided -> fetch not called
+    c = FakeConnector()
+    model = ScenarioLoader.load_from_connector(
+        c,
+        data={'invoices': [{'id': 'in_2', 'status': 'paid',
+                            'created': created_ts, 'total': 100000}],
+              'payments': [], 'expenses': []},
+        config={'sales_tax_rate': 0.21}
+    )
+    results.check("Data path does not call fetch", c.fetch_called is False)
+    results.check("Model built from provided data", len(model.invoices) == 1)
+    results.check("Config applied", model.sales_tax_rate == 0.21)
+
+    # No data -> fetch called
+    c = FakeConnector()
+    model = ScenarioLoader.load_from_connector(c)
+    results.check("No data path calls fetch", c.fetch_called is True)
+    results.check("Model built from fetched data", len(model.invoices) == 1)
+
+    return results
+
+
 def test_full_scenario():
     """End-to-end scenario validation"""
     print("\n[Full Scenario - E2E]")
@@ -541,6 +770,9 @@ def main():
     all_results.append(test_milestone_deduplication())
     all_results.append(test_sales_tax())
     all_results.append(test_monte_carlo())
+    all_results.append(test_stripe_connector())
+    all_results.append(test_quickbooks_connector())
+    all_results.append(test_load_from_connector())
     all_results.append(test_edge_cases())
     all_results.append(test_full_scenario())
     

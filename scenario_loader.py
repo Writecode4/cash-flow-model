@@ -21,6 +21,25 @@ from cash_flow_model import (
 class ScenarioLoader:
     """Load cash flow scenarios from various sources."""
     
+    # === API CONNECTORS ===
+    
+    @staticmethod
+    def load_from_connector(connector, data: Optional[Dict] = None, config: Optional[Dict] = None) -> CashFlowModel:
+        """
+        Load a scenario from an API connector (Stripe, QuickBooks, ...).
+        
+        Args:
+            connector: a connector exposing `fetch()` and `to_model()`.
+            data: optional raw payload dict. If provided, skips the live API
+                  call (useful for offline use and testing).
+            config: optional model configuration, e.g.
+                    {'initial_balance': 0, 'dpo_days': 30, 'sales_tax_rate': 0.21,
+                     'monthly_fixed_costs': {'rent': 2500}}
+        """
+        if data is None:
+            data = connector.fetch()
+        return connector.to_model(data, config=config)
+    
     # === JSON ===
     
     @staticmethod
