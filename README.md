@@ -189,6 +189,10 @@ This creates `examples/config_template.csv`, `invoices_template.csv`,
 ```bash
 # CLI: load the CSV folder, run analysis and export report.xlsx
 python load_scenario.py --csv examples
+
+# CLI: load a single JSON or Excel file
+python load_scenario.py my_company.json
+python load_scenario.py my_company.xlsx
 ```
 
 Or from code:
