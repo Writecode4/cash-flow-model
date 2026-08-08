@@ -9,6 +9,7 @@ Advanced cash flow forecasting and scenario planning tool designed specifically 
 - **Monte Carlo Simulation** - Probabilistic forecast with P10/P50/P90 ranges, survival probability and collection-risk (payment delay + bad debt) distributions
 - **Sales Tax (VAT/IVA) Awareness** - Configurable sales tax rate; liabilities are reserved from the balance so Runway uses *available* cash, not the full bank balance
 - **API Connectors** - Import real invoices, payments and expenses from **Stripe** and **QuickBooks Online**
+- **CSV / Excel / JSON Import** - Load your own data from files with generated templates and a documented schema
 - **Liquidity Stress Testing** - See how your business survives under different conditions
 - **Client Payment Behavior** - Identify slow payers and patterns
 - **Project-Level Tracking** - Monitor cash flow per project/milestone
@@ -118,27 +119,152 @@ scenarios = {
 }
 ```
 
+## Importing Your Own Data (CSV / Excel / JSON)
+
+If you don't use Stripe or QuickBooks, load your real data from files. The
+`examples/` folder ships ready-made templates — fill them in and load.
+
+### Step 1 — Generate the templates
+
+```bash
+python load_scenario.py --templates examples
+```
+
+This creates `examples/config_template.csv`, `invoices_template.csv`,
+`expenses_template.csv`, `projects_template.csv` and `scenario_template.json`.
+
+### Step 2 — Fill in the files
+
+**`config.csv`** (single row, the other files can be left empty):
+
+| Column | Type | Example | Notes |
+|--------|------|---------|-------|
+| `initial_balance` | number | `75000` | Opening cash balance |
+| `dpo_days` | int | `30` | Days payable outstanding |
+| `dio_days` | int | `0` | Days inventory (0 for services) |
+| `tax_rate` | number | `0.25` | Corporate tax rate (0-1) |
+
+**`invoices.csv`**:
+
+| Column | Type | Example | Notes |
+|--------|------|---------|-------|
+| `invoice_id` | text | `INV-001` | Unique |
+| `client` | text | `Tech Corp` | |
+| `amount` | number | `25000` | > 0 |
+| `issue_date` | date | `2026-01-01` | ISO format `YYYY-MM-DD` |
+| `due_date` | date | `2026-01-31` | Must be >= issue_date |
+| `payment_terms_days` | int | `30` | |
+| `status` | enum | `pending` | `pending` / `received` / `late` / `defaulted` |
+| `received_date` | date (empty) | `2026-01-28` | Required if status = received |
+| `received_amount` | number | `25000` | Paid amount (<= amount) |
+
+**`expenses.csv`**:
+
+| Column | Type | Example | Notes |
+|--------|------|---------|-------|
+| `expense_id` | text | `EXP-001` | Unique |
+| `description` | text | `Cloud hosting` | |
+| `amount` | number | `500` | > 0 |
+| `date` | date | `2026-01-15` | ISO format |
+| `expense_type` | enum | `variable` | `fixed` / `variable` / `one_time` / `tax` |
+| `category` | text | `Infrastructure` | |
+| `recurring` | bool | `true` | `true` / `false` — recurring expenses count toward burn rate |
+
+**`projects.csv`**:
+
+| Column | Type | Example | Notes |
+|--------|------|---------|-------|
+| `project_id` | text | `PRJ-001` | Unique |
+| `client` | text | `Client A` | |
+| `total_value` | number | `80000` | > 0 |
+| `start_date` | date | `2026-01-01` | ISO format |
+| `estimated_end_date` | date | `2026-06-30` | |
+| `payments_received` | number | `0` | <= total_value |
+| `work_completion_pct` | number | `25.0` | 0-100 |
+| `milestones_json` | JSON text | `[{"name": "Phase 1", "amount": 30000, "date": "2026-03-01", "paid": false}]` | Array of milestone dicts |
+
+### Step 3 — Load and analyze
+
+```bash
+# CLI: load the CSV folder, run analysis and export report.xlsx
+python load_scenario.py --csv examples
+```
+
+Or from code:
+
+```python
+from scenario_loader import ScenarioLoader
+
+# CSV
+model = ScenarioLoader.load_from_csv(
+    config_csv='examples/config_template.csv',
+    invoices_csv='examples/invoices_template.csv',
+    expenses_csv='examples/expenses_template.csv',
+    projects_csv='examples/projects_template.csv',
+)
+
+# Excel — sheets: Config, Invoices, Expenses, Projects (same columns as the CSVs)
+model = ScenarioLoader.load_from_excel('my_company.xlsx')
+
+# JSON
+model = ScenarioLoader.load_from_json('scenario_template.json')
+```
+
+Once loaded, the model behaves exactly like the sample models:
+
+```python
+dashboard = model.generate_dashboard_data()
+mc = model.monte_carlo(n_simulations=1000, months=12, seed=42,
+                       payment_delay_mean_days=10, bad_debt_probability=0.05)
+model.export_to_excel('my_report.xlsx')
+```
+
+**Tip:** start from `--templates`, keep one invoice per row, and leave unused
+files empty. If a value fails validation (e.g. negative amount or `received_date`
+missing on a `received` invoice), the loader raises an error telling you exactly
+what is wrong.
+
 ## API Connectors
 
-Import real data from your billing/accounting tools instead of typing dictionaries by hand.
+The connectors live in `connectors/` and are fully implemented: `StripeConnector`
+and `QuickBooksConnector`. They turn raw billing/accounting records into a
+validated `CashFlowModel`, so you stop typing invoices by hand.
+
+**Full live workflow (Stripe example):**
 
 ```python
 from connectors.stripe import StripeConnector
-from connectors.quickbooks import QuickBooksConnector
 from scenario_loader import ScenarioLoader
 
-# --- Stripe (live) ---
-connector = StripeConnector(api_key='sk_live_...')
+connector = StripeConnector(api_key='sk_live_...')          # or sk_test_...
 model = ScenarioLoader.load_from_connector(
     connector,
-    config={'initial_balance': 50000, 'sales_tax_rate': 0.21}
+    config={
+        'initial_balance': 50000,
+        'sales_tax_rate': 0.21,           # VAT/IVA
+        'monthly_fixed_costs': {'rent': 2500, 'salaries': 15000},
+    },
 )
+# model is now a normal CashFlowModel:
+print(model.generate_dashboard_data()['available_cash'])
+model.export_to_excel('stripe_report.xlsx')
+```
 
-# --- QuickBooks Online (live) ---
+**Same flow for QuickBooks Online** (OAuth2 token + realm ID):
+
+```python
+from connectors.quickbooks import QuickBooksConnector
 qb = QuickBooksConnector(access_token='OAuth2_token', realm_id='123456789')
-model = ScenarioLoader.load_from_connector(qb)
+model = ScenarioLoader.load_from_connector(qb, config={'sales_tax_rate': 0.21})
+```
 
-# --- Offline / testable: feed raw payloads directly ---
+**Offline / testable:** pass the raw payload directly — no network or keys needed.
+Parsing and `to_model()` work with plain dicts in the connector's native shape:
+
+```python
+from connectors.stripe import StripeConnector
+from scenario_loader import ScenarioLoader
+
 payload = {
     'invoices': [
         {'id': 'in_1', 'customer_name': 'Acme', 'status': 'paid',
@@ -150,17 +276,28 @@ payload = {
     'expenses': [],
 }
 model = ScenarioLoader.load_from_connector(StripeConnector(), data=payload)
-
-dashboard = model.generate_dashboard_data()
-print(f"Available cash: ${dashboard['available_cash']:,.2f}")
 ```
 
-- Stripe amounts are received in **cents** and converted to major units automatically.
-- Stripe status mapping: `paid` → RECEIVED, `open` → PENDING, `past_due` → LATE,
-  `uncollectible` → DEFAULTED, `draft`/`void` → skipped.
-- QuickBooks status is derived from `Balance`/`DueDate` (or an explicit `status` field).
-- **Optional dependencies**: `pip install stripe requests`. Live `fetch()` requires
-  real credentials; parsing and `to_model()` work offline with plain dicts.
+**Supported `config` keys** (same for both connectors):
+
+| Key | Type | Default | Meaning |
+|-----|------|---------|---------|
+| `initial_balance` | float | 0 | Opening cash balance |
+| `dpo_days` | int | 30 | Days payable outstanding |
+| `dio_days` | int | 0 | Days inventory outstanding |
+| `tax_rate` | float | 0.25 | Corporate/income tax rate |
+| `sales_tax_rate` | float | 0.0 | Sales tax (VAT/IVA) rate |
+| `monthly_fixed_costs` | dict | {} | Recurring monthly costs |
+
+**Mapping rules:**
+- **Stripe**: amounts are received in **cents** and converted to major units
+  automatically. Status: `paid` → RECEIVED, `open` → PENDING, `past_due` → LATE,
+  `uncollectible` → DEFAULTED, `draft`/`void` and `$0` invoices → skipped.
+- **QuickBooks**: status derived from `Balance`/`DueDate` (or an explicit `status`
+  field). `Balance = 0` → RECEIVED, overdue → LATE, future due → PENDING.
+- **Optional dependencies**: `pip install stripe requests`. `fetch()` requires
+  credentials and raises a clear `ConnectorError` otherwise; `to_model()` is
+  always usable offline.
 
 ## Visualization
 
@@ -178,14 +315,20 @@ dashboard.plot_monte_carlo(save_path='monte_carlo.png')
 
 ```
 cash-flow-model/
-├── cash_flow_model.py    # Core model classes
-├── dashboard.py          # Visualization module
-├── scenario_loader.py    # Load/save JSON, CSV, Excel + API connectors
-├── connectors/           # API connectors (Stripe, QuickBooks)
-├── sample_data.py        # Example data for different firm stages
-├── test_suite.py         # Formula + connector test suite
+├── cash_flow_model.py    # Core model classes (cash flow, tax, Monte Carlo)
+├── dashboard.py          # Matplotlib dashboards + Monte Carlo bands
+├── scenario_loader.py    # Load/save JSON, CSV, Excel + API connector orchestration
+├── load_scenario.py      # CLI: --templates, --csv, --interactive, JSON/Excel
+├── generate_dashboard.py # Generates the interactive Chart.js dashboard.html
+├── connectors/           # API connectors: stripe.py, quickbooks.py
+├── sample_data.py        # Sample data for startup / mid-size / growth stages
+├── test_suite.py         # Formula + connector test suite (94 checks)
 ├── run_example.py        # Demo script
-├── requirements.txt      # Dependencies
+├── index.html            # Standalone interactive HTML dashboard
+├── interactive.html      # Standalone interactive HTML dashboard (alt)
+├── examples/             # CSV/JSON templates (see "Importing Your Own Data")
+├── netlify.toml          # Static hosting config
+├── requirements.txt      # Dependencies (connectors optional, see below)
 └── README.md            # This file
 ```
 
