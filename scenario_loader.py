@@ -54,6 +54,7 @@ class ScenarioLoader:
             "dpo_days": 28,
             "dio_days": 0,
             "tax_rate": 0.25,
+            "sales_tax_rate": 0.21,
             "monthly_fixed_costs": {"rent": 3500, "salaries": 25000},
             "invoices": [...],
             "expenses": [...],
@@ -74,6 +75,7 @@ class ScenarioLoader:
             'dpo_days': model.dpo_days,
             'dio_days': model.dio_days,
             'tax_rate': model.tax_rate,
+            'sales_tax_rate': model.sales_tax_rate,
             'monthly_fixed_costs': model.monthly_fixed_costs,
             'invoices': [{
                 'invoice_id': inv.invoice_id,
@@ -102,7 +104,12 @@ class ScenarioLoader:
                 'total_value': proj.total_value,
                 'start_date': proj.start_date.isoformat(),
                 'estimated_end_date': proj.estimated_end_date.isoformat(),
-                'milestones': proj.milestones,
+                'milestones': [{
+                    'name': ms.get('name', ''),
+                    'amount': ms.get('amount', 0),
+                    'date': ms['date'].isoformat() if isinstance(ms.get('date'), datetime) else ms.get('date'),
+                    'paid': ms.get('paid', False)
+                } for ms in proj.milestones],
                 'payments_received': proj.payments_received,
                 'work_completion_pct': proj.work_completion_pct
             } for proj in model.projects]
@@ -128,7 +135,7 @@ class ScenarioLoader:
         - projects.csv: project_id,client,total_value,start_date,estimated_end_date,payments_received,work_completion_pct,milestones_json
         """
         # Load config or use defaults
-        config = {'initial_balance': 0, 'dpo_days': 30, 'dio_days': 0, 'tax_rate': 0.25}
+        config = {'initial_balance': 0, 'dpo_days': 30, 'dio_days': 0, 'tax_rate': 0.25, 'sales_tax_rate': 0.0}
         if config_csv and os.path.exists(config_csv):
             with open(config_csv, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
@@ -141,6 +148,7 @@ class ScenarioLoader:
         model.set_dpo_days(config.get('dpo_days', 30))
         model.set_dio_days(config.get('dio_days', 0))
         model.set_tax_rate(config.get('tax_rate', 0.25))
+        model.set_sales_tax_rate(config.get('sales_tax_rate', 0.0))
         
         # Load invoices
         if invoices_csv and os.path.exists(invoices_csv):
@@ -204,13 +212,14 @@ class ScenarioLoader:
         
         # Config
         with open(os.path.join(directory, 'config.csv'), 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=['initial_balance', 'dpo_days', 'dio_days', 'tax_rate'])
+            writer = csv.DictWriter(f, fieldnames=['initial_balance', 'dpo_days', 'dio_days', 'tax_rate', 'sales_tax_rate'])
             writer.writeheader()
             writer.writerow({
                 'initial_balance': model.initial_balance,
                 'dpo_days': model.dpo_days,
                 'dio_days': model.dio_days,
-                'tax_rate': model.tax_rate
+                'tax_rate': model.tax_rate,
+                'sales_tax_rate': model.sales_tax_rate
             })
         
         # Invoices
@@ -267,7 +276,12 @@ class ScenarioLoader:
                     'estimated_end_date': proj.estimated_end_date.isoformat(),
                     'payments_received': proj.payments_received,
                     'work_completion_pct': proj.work_completion_pct,
-                    'milestones_json': json.dumps(proj.milestones)
+                    'milestones_json': json.dumps([{
+                        'name': ms.get('name', ''),
+                        'amount': ms.get('amount', 0),
+                        'date': ms['date'].isoformat() if isinstance(ms.get('date'), datetime) else ms.get('date'),
+                        'paid': ms.get('paid', False)
+                    } for ms in proj.milestones])
                 })
         
         print(f"CSV files saved to {directory}/")
@@ -288,7 +302,7 @@ class ScenarioLoader:
         xls = pd.ExcelFile(filepath)
         
         # Config
-        config = {'initial_balance': 0, 'dpo_days': 30, 'dio_days': 0, 'tax_rate': 0.25}
+        config = {'initial_balance': 0, 'dpo_days': 30, 'dio_days': 0, 'tax_rate': 0.25, 'sales_tax_rate': 0.0}
         if 'Config' in xls.sheet_names:
             df = pd.read_excel(filepath, sheet_name='Config')
             for _, row in df.iterrows():
@@ -301,6 +315,7 @@ class ScenarioLoader:
         model.set_dpo_days(int(config['dpo_days']))
         model.set_dio_days(int(config['dio_days']))
         model.set_tax_rate(config['tax_rate'])
+        model.set_sales_tax_rate(config['sales_tax_rate'])
         
         # Invoices
         if 'Invoices' in xls.sheet_names:
@@ -343,6 +358,9 @@ class ScenarioLoader:
                 milestones = []
                 if pd.notna(row.get('milestones_json')):
                     milestones = json.loads(str(row['milestones_json']))
+                    for ms in milestones:
+                        if isinstance(ms.get('date'), str):
+                            ms['date'] = pd.to_datetime(ms['date']).to_pydatetime()
                 
                 model.add_project(Project(
                     project_id=str(row['project_id']),
@@ -602,8 +620,8 @@ class ScenarioLoader:
         # CSV templates
         with open(os.path.join(directory, 'config_template.csv'), 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['initial_balance', 'dpo_days', 'dio_days', 'tax_rate'])
-            writer.writerow([75000, 30, 0, 0.25])
+            writer.writerow(['initial_balance', 'dpo_days', 'dio_days', 'tax_rate', 'sales_tax_rate'])
+            writer.writerow([75000, 30, 0, 0.25, 0.21])
         
         with open(os.path.join(directory, 'invoices_template.csv'), 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
@@ -651,6 +669,7 @@ class ScenarioLoader:
         model.set_dpo_days(data.get('dpo_days', 30))
         model.set_dio_days(data.get('dio_days', 0))
         model.set_tax_rate(data.get('tax_rate', 0.25))
+        model.set_sales_tax_rate(data.get('sales_tax_rate', 0.0))
         
         # Fixed costs
         if 'monthly_fixed_costs' in data:
