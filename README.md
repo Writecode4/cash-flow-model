@@ -143,6 +143,7 @@ This creates `examples/config_template.csv`, `invoices_template.csv`,
 | `dpo_days` | int | `30` | Days payable outstanding |
 | `dio_days` | int | `0` | Days inventory (0 for services) |
 | `tax_rate` | number | `0.25` | Corporate tax rate (0-1) |
+| `sales_tax_rate` | number | `0.21` | Sales tax / VAT collected on income, settled quarterly (0 = none) |
 
 **`invoices.csv`**:
 
@@ -218,6 +219,100 @@ mc = model.monte_carlo(n_simulations=1000, months=12, seed=42,
                        payment_delay_mean_days=10, bad_debt_probability=0.05)
 model.export_to_excel('my_report.xlsx')
 ```
+
+### JSON format
+
+`scenario_template.json` is the schema the loader expects. Every field except
+the optional ones below must be present:
+
+```json
+{
+  "name": "My Business Scenario",
+  "initial_balance": 75000,
+  "dpo_days": 30,
+  "dio_days": 0,
+  "tax_rate": 0.25,
+  "sales_tax_rate": 0.21,
+  "monthly_fixed_costs": {"rent": 3500, "salaries": 25000},
+  "invoices": [
+    {
+      "invoice_id": "INV-001",
+      "client": "Tech Corp",
+      "amount": 25000,
+      "issue_date": "2026-01-15",
+      "due_date": "2026-02-15",
+      "payment_terms_days": 30,
+      "status": "pending",
+      "received_date": null,
+      "received_amount": 0
+    }
+  ],
+  "expenses": [
+    {
+      "expense_id": "EXP-001",
+      "description": "Cloud hosting",
+      "amount": 500,
+      "date": "2026-01-15",
+      "expense_type": "variable",
+      "category": "Infrastructure",
+      "recurring": true
+    }
+  ],
+  "projects": [
+    {
+      "project_id": "PRJ-001",
+      "client": "Client A",
+      "total_value": 80000,
+      "start_date": "2026-01-01",
+      "estimated_end_date": "2026-06-30",
+      "milestones": [
+        {"name": "Phase 1", "amount": 30000, "date": "2026-03-01", "paid": false}
+      ],
+      "payments_received": 0,
+      "work_completion_pct": 25.0
+    }
+  ]
+}
+```
+
+Field reference:
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `initial_balance` | number | yes | Opening cash balance |
+| `dpo_days` | int | yes | Days payable outstanding |
+| `dio_days` | int | yes | Days inventory (0 for services) |
+| `tax_rate` | number | yes | Corporate tax rate (0-1) |
+| `sales_tax_rate` | number | no | Sales tax / VAT rate (default 0) |
+| `monthly_fixed_costs` | object | no | Name → monthly amount |
+| `invoices[].invoice_id` | text | yes | Unique |
+| `invoices[].client` | text | yes | |
+| `invoices[].amount` | number | yes | > 0 |
+| `invoices[].issue_date` | date | yes | ISO `YYYY-MM-DD` |
+| `invoices[].due_date` | date | yes | >= issue_date |
+| `invoices[].payment_terms_days` | int | yes | |
+| `invoices[].status` | enum | yes | `pending` / `received` / `late` / `defaulted` |
+| `invoices[].received_date` | date | no | Required if status = received |
+| `invoices[].received_amount` | number | no | Paid amount (<= amount) |
+| `expenses[].expense_id` | text | yes | Unique |
+| `expenses[].description` | text | yes | |
+| `expenses[].amount` | number | yes | > 0 |
+| `expenses[].date` | date | yes | ISO format |
+| `expenses[].expense_type` | enum | yes | `fixed` / `variable` / `one_time` / `tax` |
+| `expenses[].category` | text | no | Defaults to `General` |
+| `expenses[].recurring` | bool | no | Recurring expenses count toward burn rate |
+| `projects[].project_id` | text | yes | Unique |
+| `projects[].client` | text | yes | |
+| `projects[].total_value` | number | yes | > 0 |
+| `projects[].start_date` | date | yes | ISO format |
+| `projects[].estimated_end_date` | date | yes | |
+| `projects[].milestones[]` | object[] | no | `name`, `amount`, `date`, `paid` |
+| `projects[].payments_received` | number | no | <= total_value |
+| `projects[].work_completion_pct` | number | no | 0-100 |
+
+The same schema maps 1:1 to the CSV columns and Excel sheets described above, so
+a consultant can export from any tool (Stripe, QuickBooks, Xero, Holded, Sage, or
+even a manual spreadsheet), reshape into this format, and load it in minutes.
 
 **Tip:** start from `--templates`, keep one invoice per row, and leave unused
 files empty. If a value fails validation (e.g. negative amount or `received_date`
